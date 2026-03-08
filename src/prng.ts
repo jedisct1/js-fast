@@ -8,16 +8,14 @@ const AES_KEY_SIZE = 16;
  * Matches the C and Zig reference implementations exactly.
  */
 export class PrngState {
-	private key: Uint8Array;
-	private counter: Uint8Array;
-	private buffer: Uint8Array;
-	private bufferPos: number;
+	private readonly key: Uint8Array;
+	private readonly counter: Uint8Array;
+	private readonly buffer = new Uint8Array(AES_BLOCK_SIZE);
+	private bufferPos = AES_BLOCK_SIZE;
 
 	constructor(key: Uint8Array, nonce: Uint8Array) {
 		this.key = new Uint8Array(key);
 		this.counter = new Uint8Array(nonce);
-		this.buffer = new Uint8Array(AES_BLOCK_SIZE);
-		this.bufferPos = AES_BLOCK_SIZE; // force refill on first use
 	}
 
 	private incrementCounter(): void {
@@ -36,36 +34,34 @@ export class PrngState {
 	}
 
 	getBytes(output: Uint8Array): void {
-		let bytesCopied = 0;
-
-		while (bytesCopied < output.length) {
-			if (this.bufferPos >= AES_BLOCK_SIZE) {
-				// Counter-then-encrypt: increment first, then encrypt
+		for (let offset = 0; offset < output.length; ) {
+			if (this.bufferPos === AES_BLOCK_SIZE) {
 				this.incrementCounter();
 				this.encryptBlock();
 				this.bufferPos = 0;
 			}
 
-			const available = AES_BLOCK_SIZE - this.bufferPos;
-			const toCopy = Math.min(output.length - bytesCopied, available);
-
-			output.set(
-				this.buffer.subarray(this.bufferPos, this.bufferPos + toCopy),
-				bytesCopied,
+			const chunkLength = Math.min(
+				output.length - offset,
+				AES_BLOCK_SIZE - this.bufferPos,
 			);
-			this.bufferPos += toCopy;
-			bytesCopied += toCopy;
+			output.set(
+				this.buffer.subarray(this.bufferPos, this.bufferPos + chunkLength),
+				offset,
+			);
+			this.bufferPos += chunkLength;
+			offset += chunkLength;
 		}
 	}
 
 	nextU32(): number {
 		const bytes = new Uint8Array(4);
 		this.getBytes(bytes);
-		// Big-endian u32
-		return (
-			((bytes[0]! << 24) | (bytes[1]! << 16) | (bytes[2]! << 8) | bytes[3]!) >>>
-			0
-		);
+		return new DataView(
+			bytes.buffer,
+			bytes.byteOffset,
+			bytes.byteLength,
+		).getUint32(0, false);
 	}
 
 	/**

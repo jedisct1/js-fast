@@ -1,2 +1,6 @@
 .swival
+*.tgz
 *~
+node_modules
+scripts/
+tmp/

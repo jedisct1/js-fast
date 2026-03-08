@@ -19,10 +19,10 @@ const DERIVED_KEY_SIZE = 32;
 
 export class FastCipher {
 	readonly params: FastParams;
-	private masterKey: Uint8Array;
-	private sboxPool: SBoxPool;
-	private cachedTweak: Uint8Array | null;
-	private cachedSeq: Uint32Array | null;
+	private readonly masterKey: Uint8Array;
+	private readonly sboxPool: SBoxPool;
+	private cachedTweak: Uint8Array | null = null;
+	private cachedSeq: Uint32Array | null = null;
 
 	private constructor(
 		params: FastParams,
@@ -32,19 +32,31 @@ export class FastCipher {
 		this.params = params;
 		this.masterKey = new Uint8Array(masterKey);
 		this.sboxPool = sboxPool;
-		this.cachedTweak = null;
-		this.cachedSeq = null;
 	}
 
-	/**
-	 * Create a new FAST cipher context.
-	 * Validates parameters and generates the S-box pool from the master key.
-	 */
 	static create(params: FastParams, key: Uint8Array): FastCipher {
-		// Validate parameters
+		FastCipher.validateParams(params, key);
+
+		const poolKeyMaterial = deriveKey(
+			key,
+			buildSetup1Input(params),
+			DERIVED_KEY_SIZE,
+		);
+		const sboxPool = generateSBoxPool(
+			params.radix,
+			params.sboxCount,
+			poolKeyMaterial,
+		);
+		poolKeyMaterial.fill(0);
+
+		return new FastCipher(params, key, sboxPool);
+	}
+
+	private static validateParams(params: FastParams, key: Uint8Array): void {
 		if (params.radix < 4 || params.radix > 256) {
 			throw new InvalidRadixError();
 		}
+
 		if (
 			params.wordLength < 2 ||
 			params.numLayers === 0 ||
@@ -54,12 +66,15 @@ export class FastCipher {
 				"Word length must be >= 2 and numLayers must be a positive multiple of wordLength",
 			);
 		}
+
 		if (params.sboxCount === 0) {
 			throw new InvalidSBoxCountError();
 		}
+
 		if (params.branchDist1 > params.wordLength - 2) {
 			throw new InvalidBranchDistError("branchDist1 must be <= wordLength - 2");
 		}
+
 		if (
 			params.branchDist2 === 0 ||
 			params.branchDist2 > params.wordLength - 1 ||
@@ -67,66 +82,47 @@ export class FastCipher {
 		) {
 			throw new InvalidBranchDistError("branchDist2 is out of valid range");
 		}
+
 		if (key.length !== AES_KEY_SIZE) {
 			throw new Error("Key must be 16 bytes");
 		}
+	}
 
-		// Derive S-box pool key material
-		const setup1Input = buildSetup1Input(params);
-		const poolKeyMaterial = deriveKey(key, setup1Input, DERIVED_KEY_SIZE);
+	private hasCachedSequenceFor(tweak: Uint8Array): boolean {
+		if (this.cachedSeq === null) {
+			return false;
+		}
 
-		// Generate S-box pool
-		const sboxPool = generateSBoxPool(
-			params.radix,
-			params.sboxCount,
-			poolKeyMaterial,
-		);
+		if (tweak.length === 0) {
+			return this.cachedTweak === null;
+		}
 
-		// Zero key material
-		poolKeyMaterial.fill(0);
+		const cachedTweak = this.cachedTweak;
+		if (cachedTweak === null || tweak.length !== cachedTweak.length) {
+			return false;
+		}
 
-		return new FastCipher(params, key, sboxPool);
+		return tweak.every((value, index) => value === cachedTweak[index]);
 	}
 
 	private ensureSequence(tweak: Uint8Array): Uint32Array {
-		// Check cache
-		if (this.cachedSeq !== null) {
-			if (
-				this.cachedTweak !== null &&
-				tweak.length === this.cachedTweak.length
-			) {
-				let match = true;
-				for (let i = 0; i < tweak.length; i++) {
-					if (tweak[i] !== this.cachedTweak[i]) {
-						match = false;
-						break;
-					}
-				}
-				if (match) return this.cachedSeq;
-			} else if (this.cachedTweak === null && tweak.length === 0) {
-				return this.cachedSeq;
-			}
+		if (this.hasCachedSequenceFor(tweak)) {
+			return this.cachedSeq!;
 		}
 
-		// Derive sequence key material
-		const setup2Input = buildSetup2Input(this.params, tweak);
 		const seqKeyMaterial = deriveKey(
 			this.masterKey,
-			setup2Input,
+			buildSetup2Input(this.params, tweak),
 			DERIVED_KEY_SIZE,
 		);
-
-		// Generate sequence
 		const seq = generateSequence(
 			this.params.numLayers,
 			this.params.sboxCount,
 			seqKeyMaterial,
 		);
-
 		seqKeyMaterial.fill(0);
 
-		// Cache
-		this.cachedTweak = tweak.length > 0 ? new Uint8Array(tweak) : null;
+		this.cachedTweak = tweak.length === 0 ? null : new Uint8Array(tweak);
 		this.cachedSeq = seq;
 
 		return seq;
@@ -136,8 +132,9 @@ export class FastCipher {
 		if (data.length !== this.params.wordLength) {
 			throw new InvalidLengthError();
 		}
-		for (let i = 0; i < data.length; i++) {
-			if (data[i]! >= this.params.radix) {
+
+		for (const value of data) {
+			if (value >= this.params.radix) {
 				throw new InvalidValueError();
 			}
 		}

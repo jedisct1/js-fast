@@ -2,6 +2,7 @@ import { createCipheriv } from "node:crypto";
 
 const AES_BLOCK_SIZE = 16;
 const AES_KEY_SIZE = 16;
+const CMAC_RB = 0x87;
 
 /**
  * AES-128 single-block encryption (ECB mode, no padding).
@@ -22,13 +23,9 @@ function generateCmacSubkeys(key: Uint8Array): {
 	k1: Uint8Array;
 	k2: Uint8Array;
 } {
-	const Rb = 0x87;
-	const zero = new Uint8Array(AES_BLOCK_SIZE);
-	const L = aesEncryptBlock(key, zero);
-
-	// Left-shift by 1 and conditionally XOR with Rb
-	const k1 = leftShiftAndXor(L, Rb);
-	const k2 = leftShiftAndXor(k1, Rb);
+	const block = aesEncryptBlock(key, new Uint8Array(AES_BLOCK_SIZE));
+	const k1 = leftShiftAndXor(block, CMAC_RB);
+	const k2 = leftShiftAndXor(k1, CMAC_RB);
 
 	return { k1, k2 };
 }
@@ -53,53 +50,40 @@ function leftShiftAndXor(input: Uint8Array, xorByte: number): Uint8Array {
  */
 function aesCmac(key: Uint8Array, message: Uint8Array): Uint8Array {
 	const { k1, k2 } = generateCmacSubkeys(key);
-
-	const n =
+	const blockCount =
 		message.length === 0 ? 1 : Math.ceil(message.length / AES_BLOCK_SIZE);
-	const lastBlockComplete =
+	const lastBlockOffset = (blockCount - 1) * AES_BLOCK_SIZE;
+	const hasFullLastBlock =
 		message.length > 0 && message.length % AES_BLOCK_SIZE === 0;
-
-	// Prepare last block
 	const lastBlock = new Uint8Array(AES_BLOCK_SIZE);
-	const lastBlockStart = (n - 1) * AES_BLOCK_SIZE;
 
-	if (lastBlockComplete) {
-		// XOR last complete block with K1
+	if (hasFullLastBlock) {
 		for (let i = 0; i < AES_BLOCK_SIZE; i++) {
-			lastBlock[i] = message[lastBlockStart + i]! ^ k1[i]!;
+			lastBlock[i] = message[lastBlockOffset + i]! ^ k1[i]!;
 		}
 	} else {
-		// Pad incomplete block: append 1-bit then zeros, XOR with K2
-		const remaining = message.length - lastBlockStart;
+		const remaining = message.length - lastBlockOffset;
+		lastBlock.set(message.subarray(lastBlockOffset));
+		lastBlock[remaining] = 0x80;
 		for (let i = 0; i < AES_BLOCK_SIZE; i++) {
-			if (i < remaining) {
-				lastBlock[i] = message[lastBlockStart + i]! ^ k2[i]!;
-			} else if (i === remaining) {
-				lastBlock[i] = 0x80 ^ k2[i]!;
-			} else {
-				lastBlock[i] = k2[i]!;
-			}
+			lastBlock[i]! ^= k2[i]!;
 		}
 	}
 
-	// CBC-MAC
-	const x = new Uint8Array(AES_BLOCK_SIZE);
-
-	for (let i = 0; i < n - 1; i++) {
-		const blockStart = i * AES_BLOCK_SIZE;
-		for (let j = 0; j < AES_BLOCK_SIZE; j++) {
-			x[j]! ^= message[blockStart + j]!;
+	const state = new Uint8Array(AES_BLOCK_SIZE);
+	for (let blockIndex = 0; blockIndex < blockCount - 1; blockIndex++) {
+		const blockOffset = blockIndex * AES_BLOCK_SIZE;
+		for (let i = 0; i < AES_BLOCK_SIZE; i++) {
+			state[i]! ^= message[blockOffset + i]!;
 		}
-		const encrypted = aesEncryptBlock(key, x);
-		x.set(encrypted);
+		state.set(aesEncryptBlock(key, state));
 	}
 
-	// Last block
-	for (let j = 0; j < AES_BLOCK_SIZE; j++) {
-		x[j]! ^= lastBlock[j]!;
+	for (let i = 0; i < AES_BLOCK_SIZE; i++) {
+		state[i]! ^= lastBlock[i]!;
 	}
 
-	return aesEncryptBlock(key, x);
+	return aesEncryptBlock(key, state);
 }
 
 /**

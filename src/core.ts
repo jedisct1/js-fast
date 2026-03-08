@@ -27,28 +27,16 @@ function esLayer(
 	data: Uint8Array,
 	sboxIndex: number,
 ): void {
-	const w = params.branchDist1;
-	const wp = params.branchDist2;
-	const ell = params.wordLength;
-	const radix = params.radix;
-	const box = pool.sboxes[sboxIndex]!;
-	const perm = box.perm;
+	const { branchDist1, branchDist2, wordLength, radix } = params;
+	const perm = pool.sboxes[sboxIndex]!.perm;
+	const sum = perm[modAdd(data[0]!, data[wordLength - branchDist2]!, radix)]!;
+	const next =
+		branchDist1 > 0
+			? perm[modSub(sum, data[branchDist1]!, radix)]!
+			: perm[sum]!;
 
-	// sum1 = S[data[0] + data[ell - wp]]
-	const sum1 = perm[modAdd(data[0]!, data[ell - wp]!, radix)]!;
-
-	let newLast: number;
-	if (w > 0) {
-		// S[sum1 - data[w]]
-		newLast = perm[modSub(sum1, data[w]!, radix)]!;
-	} else {
-		// S[sum1] (double application)
-		newLast = perm[sum1]!;
-	}
-
-	// Shift left by 1
-	data.copyWithin(0, 1, ell);
-	data[ell - 1] = newLast;
+	data.copyWithin(0, 1, wordLength);
+	data[wordLength - 1] = next;
 }
 
 /**
@@ -61,30 +49,25 @@ function dsLayer(
 	data: Uint8Array,
 	sboxIndex: number,
 ): void {
-	const w = params.branchDist1;
-	const wp = params.branchDist2;
-	const ell = params.wordLength;
-	const radix = params.radix;
-	const box = pool.sboxes[sboxIndex]!;
-	const inv = box.inv;
+	const { branchDist1, branchDist2, wordLength, radix } = params;
+	const inv = pool.sboxes[sboxIndex]!.inv;
+	const last = inv[data[wordLength - 1]!]!;
+	const intermediate =
+		branchDist1 > 0
+			? inv[modAdd(last, data[branchDist1 - 1]!, radix)]!
+			: inv[last]!;
+	const next = modSub(intermediate, data[wordLength - branchDist2 - 1]!, radix);
 
-	// Inverse S-box on last element
-	const xLast = inv[data[ell - 1]!]!;
+	data.copyWithin(1, 0, wordLength - 1);
+	data[0] = next;
+}
 
-	let intermediate: number;
-	if (w > 0) {
-		// S^-1[xLast + data[w-1]]
-		intermediate = inv[modAdd(xLast, data[w - 1]!, radix)]!;
-	} else {
-		// S^-1[S^-1[xLast]] (double inverse)
-		intermediate = inv[xLast]!;
-	}
-
-	const newFirst = modSub(intermediate, data[ell - wp - 1]!, radix);
-
-	// Shift right by 1
-	data.copyWithin(1, 0, ell - 1);
-	data[0] = newFirst;
+function resolveSBoxIndex(
+	seq: Uint32Array,
+	layer: number,
+	sboxCount: number,
+): number {
+	return seq.length > 0 ? seq[layer]! : layer % sboxCount;
 }
 
 /**
@@ -97,13 +80,15 @@ export function cenc(
 	input: Uint8Array,
 	output: Uint8Array,
 ): void {
-	// Copy input to output
 	output.set(input);
 
-	const hasSeq = seq.length > 0;
-	for (let i = 0; i < params.numLayers; i++) {
-		const sboxIndex = hasSeq ? seq[i]! : i % params.sboxCount;
-		esLayer(params, pool, output, sboxIndex);
+	for (let layer = 0; layer < params.numLayers; layer++) {
+		esLayer(
+			params,
+			pool,
+			output,
+			resolveSBoxIndex(seq, layer, params.sboxCount),
+		);
 	}
 }
 
@@ -117,12 +102,14 @@ export function cdec(
 	input: Uint8Array,
 	output: Uint8Array,
 ): void {
-	// Copy input to output
 	output.set(input);
 
-	const hasSeq = seq.length > 0;
-	for (let i = params.numLayers - 1; i >= 0; i--) {
-		const sboxIndex = hasSeq ? seq[i]! : i % params.sboxCount;
-		dsLayer(params, pool, output, sboxIndex);
+	for (let layer = params.numLayers - 1; layer >= 0; layer--) {
+		dsLayer(
+			params,
+			pool,
+			output,
+			resolveSBoxIndex(seq, layer, params.sboxCount),
+		);
 	}
 }

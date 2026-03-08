@@ -40,38 +40,44 @@ function interpolate(
 	y0: number,
 	y1: number,
 ): number {
-	if (x1 === x0) return y0;
-	const t = (x - x0) / (x1 - x0);
-	if (t <= 0.0) return y0;
-	if (t >= 1.0) return y1;
-	return y0 + t * (y1 - y0);
+	if (x1 === x0) {
+		return y0;
+	}
+
+	const ratio = (x - x0) / (x1 - x0);
+	if (ratio <= 0) {
+		return y0;
+	}
+	if (ratio >= 1) {
+		return y1;
+	}
+
+	return y0 + ratio * (y1 - y0);
 }
 
 function roundsForRow(rowIndex: number, ell: number): number {
 	const row = ROUND_TABLE[rowIndex]!;
-	const lCount = ROUND_L_VALUES.length;
+	const lastIndex = ROUND_L_VALUES.length - 1;
+	const maxWordLength = ROUND_L_VALUES[lastIndex]!;
 
 	if (ell <= ROUND_L_VALUES[0]!) {
 		return row[0]!;
 	}
-	if (ell >= ROUND_L_VALUES[lCount - 1]!) {
-		const last = row[lCount - 1]!;
-		const ratio = Math.sqrt(ell / ROUND_L_VALUES[lCount - 1]!);
-		const projected = last * ratio;
-		return projected < last ? last : projected;
+
+	if (ell >= maxWordLength) {
+		const baseRounds = row[lastIndex]!;
+		return Math.max(baseRounds, baseRounds * Math.sqrt(ell / maxWordLength));
 	}
 
-	for (let i = 1; i < lCount; i++) {
-		const lPrev = ROUND_L_VALUES[i - 1]!;
-		const lCurr = ROUND_L_VALUES[i]!;
-		if (ell <= lCurr) {
-			const rPrev = row[i - 1]!;
-			const rCurr = row[i]!;
-			return interpolate(ell, lPrev, lCurr, rPrev, rCurr);
+	for (let i = 1; i <= lastIndex; i++) {
+		const lowerLength = ROUND_L_VALUES[i - 1]!;
+		const upperLength = ROUND_L_VALUES[i]!;
+		if (ell <= upperLength) {
+			return interpolate(ell, lowerLength, upperLength, row[i - 1]!, row[i]!);
 		}
 	}
 
-	return row[lCount - 1]!;
+	return row[lastIndex]!;
 }
 
 /**
@@ -79,30 +85,32 @@ function roundsForRow(rowIndex: number, ell: number): number {
  * Matches the reference implementations exactly.
  */
 function lookupRecommendedRounds(radix: number, ell: number): number {
-	const radixCount = ROUND_RADICES.length;
+	const lastIndex = ROUND_RADICES.length - 1;
 
 	if (radix <= ROUND_RADICES[0]!) {
 		return roundsForRow(0, ell);
 	}
-	if (radix >= ROUND_RADICES[radixCount - 1]!) {
-		return roundsForRow(radixCount - 1, ell);
+
+	if (radix >= ROUND_RADICES[lastIndex]!) {
+		return roundsForRow(lastIndex, ell);
 	}
 
-	for (let i = 1; i < radixCount; i++) {
-		const rPrev = ROUND_RADICES[i - 1]!;
-		const rCurr = ROUND_RADICES[i]!;
-		if (radix <= rCurr) {
-			const roundsPrev = roundsForRow(i - 1, ell);
-			const roundsCurr = roundsForRow(i, ell);
-			// Log-space interpolation over radix values
-			const logPrev = Math.log(rPrev);
-			const logCurr = Math.log(rCurr);
-			const logRadix = Math.log(radix);
-			return interpolate(logRadix, logPrev, logCurr, roundsPrev, roundsCurr);
+	const logRadix = Math.log(radix);
+	for (let i = 1; i <= lastIndex; i++) {
+		const lowerRadix = ROUND_RADICES[i - 1]!;
+		const upperRadix = ROUND_RADICES[i]!;
+		if (radix <= upperRadix) {
+			return interpolate(
+				logRadix,
+				Math.log(lowerRadix),
+				Math.log(upperRadix),
+				roundsForRow(i - 1, ell),
+				roundsForRow(i, ell),
+			);
 		}
 	}
 
-	return roundsForRow(radixCount - 1, ell);
+	return roundsForRow(lastIndex, ell);
 }
 
 /**

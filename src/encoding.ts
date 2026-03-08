@@ -1,16 +1,16 @@
 import type { FastParams } from "./types.ts";
 
-const LABEL_INSTANCE1 = new TextEncoder().encode("instance1");
-const LABEL_INSTANCE2 = new TextEncoder().encode("instance2");
-const LABEL_FPE_POOL = new TextEncoder().encode("FPE Pool");
-const LABEL_FPE_SEQ = new TextEncoder().encode("FPE SEQ");
-const LABEL_TWEAK = new TextEncoder().encode("tweak");
+const encoder = new TextEncoder();
+const LABEL_INSTANCE1 = encoder.encode("instance1");
+const LABEL_INSTANCE2 = encoder.encode("instance2");
+const LABEL_FPE_POOL = encoder.encode("FPE Pool");
+const LABEL_FPE_SEQ = encoder.encode("FPE SEQ");
+const LABEL_TWEAK = encoder.encode("tweak");
 
 function writeU32Be(value: number): Uint8Array {
-	const buf = new Uint8Array(4);
-	const view = new DataView(buf.buffer);
-	view.setUint32(0, value, false);
-	return buf;
+	const bytes = new Uint8Array(4);
+	new DataView(bytes.buffer).setUint32(0, value, false);
+	return bytes;
 }
 
 /**
@@ -18,26 +18,22 @@ function writeU32Be(value: number): Uint8Array {
  * Format: 4-byte BE part count, then for each part: 4-byte BE length + raw bytes.
  */
 export function encodeParts(parts: Uint8Array[]): Uint8Array {
-	let total = 4; // part count
-	for (const part of parts) {
-		total += 4 + part.length;
-	}
+	const totalLength = parts.reduce((total, part) => total + 4 + part.length, 4);
+	const encoded = new Uint8Array(totalLength);
+	const view = new DataView(encoded.buffer);
+	let offset = 0;
 
-	const buffer = new Uint8Array(total);
-	const view = new DataView(buffer.buffer);
-	let pos = 0;
-
-	view.setUint32(pos, parts.length, false);
-	pos += 4;
+	view.setUint32(offset, parts.length, false);
+	offset += 4;
 
 	for (const part of parts) {
-		view.setUint32(pos, part.length, false);
-		pos += 4;
-		buffer.set(part, pos);
-		pos += part.length;
+		view.setUint32(offset, part.length, false);
+		offset += 4;
+		encoded.set(part, offset);
+		offset += part.length;
 	}
 
-	return buffer;
+	return encoded;
 }
 
 /**

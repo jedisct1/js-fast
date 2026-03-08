@@ -12,20 +12,15 @@ export function generateSBox(radix: number, prng: PrngState): SBox {
 	const perm = new Uint8Array(radix);
 	const inv = new Uint8Array(radix);
 
-	// Initialize to identity
 	for (let i = 0; i < radix; i++) {
 		perm[i] = i;
 	}
 
-	// Fisher-Yates shuffle (matching reference: iterate from radix down to 2)
-	for (let i = radix; i > 1; i--) {
-		const j = prng.uniform(i);
-		const temp = perm[i - 1]!;
-		perm[i - 1] = perm[j]!;
-		perm[j] = temp;
+	for (let i = radix - 1; i > 0; i--) {
+		const j = prng.uniform(i + 1);
+		[perm[i], perm[j]] = [perm[j]!, perm[i]!];
 	}
 
-	// Compute inverse
 	for (let i = 0; i < radix; i++) {
 		inv[perm[i]!] = i;
 	}

@@ -1,55 +1,53 @@
-export class FastError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = "FastError";
-	}
-}
+export class FastError extends Error {}
 
 export class InvalidRadixError extends FastError {
+	override name = "InvalidRadixError";
+
 	constructor() {
 		super("Radix must be between 4 and 256");
-		this.name = "InvalidRadixError";
 	}
 }
 
 export class InvalidWordLengthError extends FastError {
+	override name = "InvalidWordLengthError";
+
 	constructor(message = "Word length must be >= 2") {
 		super(message);
-		this.name = "InvalidWordLengthError";
 	}
 }
 
 export class InvalidSBoxCountError extends FastError {
+	override name = "InvalidSBoxCountError";
+
 	constructor() {
 		super("S-box count must be > 0");
-		this.name = "InvalidSBoxCountError";
 	}
 }
 
 export class InvalidBranchDistError extends FastError {
-	constructor(message: string) {
-		super(message);
-		this.name = "InvalidBranchDistError";
-	}
+	override name = "InvalidBranchDistError";
 }
 
 export class InvalidLengthError extends FastError {
+	override name = "InvalidLengthError";
+
 	constructor() {
 		super("Input length does not match word length");
-		this.name = "InvalidLengthError";
 	}
 }
 
 export class InvalidValueError extends FastError {
+	override name = "InvalidValueError";
+
 	constructor() {
 		super("Input value exceeds radix");
-		this.name = "InvalidValueError";
 	}
 }
 
 export class InvalidParametersError extends FastError {
+	override name = "InvalidParametersError";
+
 	constructor(message = "Invalid parameters") {
 		super(message);
-		this.name = "InvalidParametersError";
 	}
 }
