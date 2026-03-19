@@ -131,6 +131,13 @@ const encrypted = enc.encrypt(text);
 const decrypted = enc.decrypt(encrypted);
 // decrypted === text
 
+// Get structured span info alongside the encrypted text
+const result = enc.encryptWithSpans(text);
+console.log(result.text);  // full encrypted text
+for (const span of result.spans) {
+  console.log(span.patternName, span.original, "->", span.encrypted);
+}
+
 enc.destroy();
 ```
 
