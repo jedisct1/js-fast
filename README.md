@@ -64,7 +64,7 @@ cipher.destroy();
 - `wordLength` must be at least 2
 - `numLayers` must be a positive multiple of `wordLength`
 - `branchDist1` must be at most `wordLength - 2`
-- `branchDist2` must be in range for the chosen word length and branch distances
+- `branchDist2` must be >= 1, at most `wordLength - 1`, and at most `wordLength - branchDist1 - 1`
 - plaintext and ciphertext must have length `wordLength`
 - every symbol in the input must be in the range `[0, radix)`
 
@@ -113,6 +113,69 @@ Zeros the stored master key material held by the cipher instance.
 
 The package exports `FastError` plus the concrete error classes used for invalid inputs and parameters:
 `InvalidBranchDistError`, `InvalidLengthError`, `InvalidParametersError`, `InvalidRadixError`, `InvalidSBoxCountError`, `InvalidValueError`, and `InvalidWordLengthError`.
+
+## Token Encryption
+
+The `fast-cipher/tokens` subpath exports a higher-level `TokenEncryptor` that scans text for known secret token formats (API keys, access tokens, etc.) and encrypts them in place using format-preserving encryption. The encrypted output has the same length, character set, and prefix as the original token.
+
+```ts
+import { TokenEncryptor } from "fast-cipher/tokens";
+
+const key = new Uint8Array(16); // 16-byte AES key
+crypto.getRandomValues(key);
+
+const enc = new TokenEncryptor(key);
+
+const text = "My GitHub token is ghp_ABCDEFabcdef1234567890abcdef12345678";
+const encrypted = enc.encrypt(text);
+const decrypted = enc.decrypt(encrypted);
+// decrypted === text
+
+enc.destroy();
+```
+
+### Supported Token Formats
+
+There are three kinds of built-in patterns:
+
+**Prefix-based** (fully format-preserving) -- The prefix (`ghp_`, `sk-proj-`, `AKIA`, etc.) is preserved as-is and only the body is encrypted. The output has the same length, prefix, and character set as the input. Covers: OpenAI, Anthropic, GitHub, GitLab, AWS access keys, Stripe, Google, Twilio, npm, PyPI, Datadog, Vercel, Supabase, HuggingFace, and Grafana.
+
+**Structured** (fully format-preserving) -- Tokens with internal delimiters like SendGrid (`SG.<seg1>.<seg2>`) and Slack (`xoxb-<seg1>-<seg2>-<seg3>`) encrypt each segment independently while preserving the prefix and delimiters.
+
+**Heuristic** (marker-based) -- Some tokens have no fixed prefix (e.g. Fastly API tokens, AWS secret keys). These are detected using heuristics: exact length constraints, word boundary detection, Shannon entropy thresholds, and character class diversity. On encrypt, a `[ENCRYPTED:<name>]` marker is prepended so that `decrypt()` can safely identify encrypted spans without corrupting plaintext strings that happen to look token-like. The encrypted body itself is format-preserving (same length and alphabet), but the marker makes the overall output longer than the input. Heuristic patterns are active by default and can be excluded via the `types` filter.
+
+### Options
+
+```ts
+// Restrict to specific pattern names
+const opts = { types: ["github-pat", "openai"] };
+const filtered = enc.encrypt(text, opts);
+// IMPORTANT: pass the same types filter to decrypt()
+const restored = enc.decrypt(filtered, opts);
+
+// Per-document tweak to break deterministic linkage
+const tweaked = enc.encrypt(text, { tweak: new Uint8Array([1, 2, 3]) });
+const untweaked = enc.decrypt(tweaked, { tweak: new Uint8Array([1, 2, 3]) });
+```
+
+### Custom Patterns
+
+```ts
+import { TokenEncryptor, ALPHANUMERIC } from "fast-cipher/tokens";
+
+const enc = new TokenEncryptor(key);
+
+enc.register({
+  kind: "simple",
+  name: "my-service",
+  prefix: "myapp_",
+  bodyRegex: "[A-Za-z0-9]{32}",
+  bodyAlphabet: ALPHANUMERIC,
+  minBodyLength: 32,
+});
+```
+
+The exported alphabets are `ALPHANUMERIC`, `ALPHANUMERIC_LOWER`, `ALPHANUMERIC_UPPER`, `BASE64`, `BASE64URL`, `DIGITS`, and `HEX_LOWER`.
 
 ## Development
 

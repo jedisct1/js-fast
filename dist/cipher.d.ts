@@ -1,16 +1,14 @@
 import type { FastParams } from "./types.ts";
 export declare class FastCipher {
     readonly params: FastParams;
-    private masterKey;
-    private sboxPool;
+    private readonly masterKey;
+    private readonly sboxPool;
     private cachedTweak;
     private cachedSeq;
     private constructor();
-    /**
-     * Create a new FAST cipher context.
-     * Validates parameters and generates the S-box pool from the master key.
-     */
     static create(params: FastParams, key: Uint8Array): FastCipher;
+    private static validateParams;
+    private hasCachedSequenceFor;
     private ensureSequence;
     private validateInput;
     /**

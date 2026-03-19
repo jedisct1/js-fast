@@ -3,9 +3,9 @@
  * Matches the C and Zig reference implementations exactly.
  */
 export declare class PrngState {
-    private key;
-    private counter;
-    private buffer;
+    private readonly key;
+    private readonly counter;
+    private readonly buffer;
     private bufferPos;
     constructor(key: Uint8Array, nonce: Uint8Array);
     private incrementCounter;
