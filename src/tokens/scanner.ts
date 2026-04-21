@@ -416,6 +416,10 @@ function scanStructured(
 	const regex = new RegExp(pattern.fullRegex, "g");
 	for (let match = regex.exec(text); match !== null; match = regex.exec(text)) {
 		const matchStart = match.index;
+		if (match[0].length === 0) {
+			regex.lastIndex = matchStart + 1;
+			continue;
+		}
 		const matchEnd = matchStart + match[0].length;
 		const bodyStart = matchStart + pattern.prefix.length;
 
@@ -440,7 +444,10 @@ function scanStructured(
 			continue;
 		}
 
-		// No truncation. Apply trailing boundary check.
+		// No truncation. Require the full body to satisfy the parser contract.
+		const body = text.slice(bodyStart, matchEnd);
+		if (pattern.parse(body) === null) continue;
+
 		if (matchEnd < text.length) {
 			const nextCh = text[matchEnd]!;
 			if (pattern.trailingAlphabet.charToIndex.has(nextCh)) {
@@ -452,7 +459,7 @@ function scanStructured(
 			start: matchStart,
 			end: matchEnd,
 			pattern,
-			body: text.slice(bodyStart, matchEnd),
+			body,
 		});
 	}
 }

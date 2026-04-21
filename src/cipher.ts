@@ -21,6 +21,7 @@ export class FastCipher {
 	readonly params: FastParams;
 	private readonly masterKey: Uint8Array;
 	private readonly sboxPool: SBoxPool;
+	private destroyed = false;
 	private cachedTweak: Uint8Array | null = null;
 	private cachedSeq: Uint32Array | null = null;
 
@@ -140,6 +141,12 @@ export class FastCipher {
 		}
 	}
 
+	private assertNotDestroyed(): void {
+		if (this.destroyed) {
+			throw new Error("Cipher has been destroyed");
+		}
+	}
+
 	/**
 	 * Encrypt plaintext using the FAST cipher.
 	 * Each value in plaintext must be in [0, radix).
@@ -148,6 +155,7 @@ export class FastCipher {
 		plaintext: Uint8Array,
 		tweak: Uint8Array = new Uint8Array(0),
 	): Uint8Array {
+		this.assertNotDestroyed();
 		this.validateInput(plaintext);
 		const seq = this.ensureSequence(tweak);
 		const ciphertext = new Uint8Array(this.params.wordLength);
@@ -163,6 +171,7 @@ export class FastCipher {
 		ciphertext: Uint8Array,
 		tweak: Uint8Array = new Uint8Array(0),
 	): Uint8Array {
+		this.assertNotDestroyed();
 		this.validateInput(ciphertext);
 		const seq = this.ensureSequence(tweak);
 		const plaintext = new Uint8Array(this.params.wordLength);
@@ -174,8 +183,17 @@ export class FastCipher {
 	 * Zero out sensitive key material.
 	 */
 	destroy(): void {
+		if (this.destroyed) return;
+
 		this.masterKey.fill(0);
+		this.cachedSeq?.fill(0);
 		this.cachedSeq = null;
+		this.cachedTweak?.fill(0);
 		this.cachedTweak = null;
+		for (const sbox of this.sboxPool.sboxes) {
+			sbox.perm.fill(0);
+			sbox.inv.fill(0);
+		}
+		this.destroyed = true;
 	}
 }

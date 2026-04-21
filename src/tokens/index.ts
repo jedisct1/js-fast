@@ -12,7 +12,7 @@ import {
 import { BUILTIN_PATTERNS, MIN_SEGMENT_LENGTH } from "./registry.ts";
 import { scan } from "./scanner.ts";
 import { transformBody } from "./transformer.ts";
-import type { TokenPattern, TokenSpan } from "./types.ts";
+import type { Alphabet, TokenPattern, TokenSpan } from "./types.ts";
 
 export { BUILTIN_PATTERNS, MIN_SEGMENT_LENGTH } from "./registry.ts";
 export { scan } from "./scanner.ts";
@@ -151,36 +151,52 @@ export class TokenEncryptor {
 	decrypt(text: string, options?: TokenEncryptorOptions): string {
 		this.assertAlive();
 		const patterns = this.activePatterns(options);
-
-		// First pass: decrypt heuristic markers ([ENCRYPTED:<name>]<body>).
-		// These are unambiguous prefixes, so they don't need entropy checks.
-		const heuristicPatterns = patterns.filter((p) => p.kind === "heuristic");
-		let result = text;
-		if (heuristicPatterns.length > 0) {
-			result = this.decryptHeuristicMarkers(
-				result,
-				heuristicPatterns,
-				options?.tweak,
-			);
-		}
-
-		// Second pass: decrypt prefix-based tokens (simple + structured).
 		const prefixPatterns = patterns.filter((p) => p.kind !== "heuristic");
-		if (prefixPatterns.length === 0) return result;
+		const heuristicPatterns = patterns.filter((p) => p.kind === "heuristic");
 
-		const spans = scan(result, prefixPatterns, this.patterns);
-		if (spans.length === 0) return result;
+		const spans = prefixPatterns.length === 0
+			? []
+			: scan(text, prefixPatterns, this.patterns);
+		const heuristicHits =
+			heuristicPatterns.length === 0
+				? []
+				: this.findHeuristicMarkerHits(text, heuristicPatterns);
+		if (spans.length === 0 && heuristicHits.length === 0) return text;
 
 		const parts: string[] = [];
 		let cursor = 0;
+		let spanIndex = 0;
+		let hitIndex = 0;
 
-		for (const span of spans) {
-			parts.push(result.slice(cursor, span.start));
-			parts.push(this.decryptSpan(span, options?.tweak));
-			cursor = span.end;
+		while (spanIndex < spans.length || hitIndex < heuristicHits.length) {
+			const span = spanIndex < spans.length ? spans[spanIndex]! : undefined;
+			const hit =
+				hitIndex < heuristicHits.length ? heuristicHits[hitIndex]! : undefined;
+
+			if (hit && (!span || hit.start < span.start)) {
+				if (hit.start >= cursor) {
+					parts.push(text.slice(cursor, hit.start));
+					const tweak = this.makeTweak(hit.patternName, options?.tweak);
+					const cipher = this.getCipher(hit.alphabet.radix, hit.body.length);
+					parts.push(
+						transformBody(hit.body, hit.alphabet, cipher, "decrypt", tweak),
+					);
+					cursor = hit.end;
+				}
+				hitIndex++;
+				continue;
+			}
+
+			if (!span) break;
+			if (span.start >= cursor) {
+				parts.push(text.slice(cursor, span.start));
+				parts.push(this.decryptSpan(span, options?.tweak));
+				cursor = span.end;
+			}
+			spanIndex++;
 		}
 
-		parts.push(result.slice(cursor));
+		parts.push(text.slice(cursor));
 		return parts.join("");
 	}
 
@@ -275,22 +291,23 @@ export class TokenEncryptor {
 		return pattern.prefix + pattern.format(transformedSegments);
 	}
 
-	private decryptHeuristicMarkers(
+	private findHeuristicMarkerHits(
 		text: string,
 		patterns: readonly TokenPattern[],
-		extraTweak?: Uint8Array,
-	): string {
-		// Find all marker spans across all heuristic patterns, then process
-		// in text order. This avoids order-dependence on pattern iteration.
-		interface MarkerHit {
+	): Array<{
+		start: number;
+		end: number;
+		body: string;
+		patternName: string;
+		alphabet: Alphabet;
+	}> {
+		const hits: Array<{
 			start: number;
 			end: number;
 			body: string;
 			patternName: string;
-			alphabet: import("./types.ts").Alphabet;
-		}
-
-		const hits: MarkerHit[] = [];
+			alphabet: Alphabet;
+		}> = [];
 
 		for (const pattern of patterns) {
 			if (pattern.kind !== "heuristic") continue;
@@ -335,27 +352,10 @@ export class TokenEncryptor {
 			}
 		}
 
-		if (hits.length === 0) return text;
+		if (hits.length === 0) return hits;
 
-		// Sort by text position and remove overlaps.
 		hits.sort((a, b) => a.start - b.start);
-
-		const parts: string[] = [];
-		let cursor = 0;
-
-		for (const hit of hits) {
-			if (hit.start < cursor) continue; // skip overlap
-			parts.push(text.slice(cursor, hit.start));
-			const tweak = this.makeTweak(hit.patternName, extraTweak);
-			const cipher = this.getCipher(hit.alphabet.radix, hit.body.length);
-			parts.push(
-				transformBody(hit.body, hit.alphabet, cipher, "decrypt", tweak),
-			);
-			cursor = hit.end;
-		}
-
-		parts.push(text.slice(cursor));
-		return parts.join("");
+		return hits;
 	}
 
 	register(pattern: TokenPattern): void {
