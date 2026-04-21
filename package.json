@@ -1,6 +1,6 @@
 {
 	"name": "fast-cipher",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"description": "A Bun, Node.js, and TypeScript implementation of the FAST format-preserving cipher",
 	"type": "module",
 	"main": "./dist/index.js",
