@@ -131,7 +131,10 @@ export function calculateRecommendedParams(
 	const wCandidate = Math.ceil(Math.sqrt(wordLength));
 	const branchDist1 =
 		wordLength <= 2 ? 0 : Math.min(wCandidate, wordLength - 2);
-	const branchDist2 = branchDist1 > 1 ? branchDist1 - 1 : 1;
+	const branchDist2 = Math.min(
+		branchDist1 > 1 ? branchDist1 - 1 : 1,
+		wordLength - branchDist1 - 1,
+	);
 
 	let rounds = lookupRecommendedRounds(radix, wordLength);
 	if (rounds < 1.0) rounds = 1.0;

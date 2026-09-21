@@ -3,6 +3,7 @@ export declare class FastCipher {
     readonly params: FastParams;
     private readonly masterKey;
     private readonly sboxPool;
+    private destroyed;
     private cachedTweak;
     private cachedSeq;
     private constructor();
@@ -11,6 +12,7 @@ export declare class FastCipher {
     private hasCachedSequenceFor;
     private ensureSequence;
     private validateInput;
+    private assertNotDestroyed;
     /**
      * Encrypt plaintext using the FAST cipher.
      * Each value in plaintext must be in [0, radix).

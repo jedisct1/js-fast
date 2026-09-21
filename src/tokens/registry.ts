@@ -37,16 +37,21 @@ function simple(
 function makeSlackPattern(
 	prefix: string,
 	name: string,
+	allowUserId = false,
 ): StructuredTokenPattern {
+	const bodyRegex = allowUserId
+		? /\d+-\d+-(?:\d+-)?[A-Za-z0-9]+/
+		: /\d+-\d+-[A-Za-z0-9]+/;
+	const bodyValidator = new RegExp(`^(?:${bodyRegex.source})$`);
 	return {
 		kind: "structured",
 		name,
 		prefix,
 		trailingAlphabet: ALPHANUMERIC,
-		fullRegex: `${escapeRegex(prefix)}\\d+-\\d+-[A-Za-z0-9]+`,
+		fullRegex: `${escapeRegex(prefix)}${bodyRegex.source}`,
 		parse(body: string): { segments: string[]; alphabets: Alphabet[] } | null {
+			if (!bodyValidator.test(body)) return null;
 			const parts = body.split("-");
-			if (parts.length < 3) return null;
 			let totalLen = 0;
 			for (const p of parts) totalLen += p.length;
 			if (totalLen < 20) return null;
@@ -115,11 +120,8 @@ const sendgridPattern: StructuredTokenPattern = {
 };
 
 export const BUILTIN_PATTERNS: readonly TokenPattern[] = [
-	// Longest prefixes first for correct overlap resolution.
-	// Anthropic must come before generic sk- patterns.
 	simple("anthropic", "sk-ant-api03-", "[A-Za-z0-9_-]{80,}", BASE64URL, 80),
 
-	// OpenAI sk-proj- must come before sk-
 	simple("openai", "sk-proj-", "[A-Za-z0-9_-]{48,}", BASE64URL, 48),
 	simple("openai-legacy", "sk-", "[A-Za-z0-9]{48}", ALPHANUMERIC, 48),
 
@@ -167,7 +169,7 @@ export const BUILTIN_PATTERNS: readonly TokenPattern[] = [
 
 	// Slack (5-char prefix, structured)
 	makeSlackPattern("xoxb-", "slack-bot"),
-	makeSlackPattern("xoxp-", "slack-user"),
+	makeSlackPattern("xoxp-", "slack-user", true),
 
 	// GitHub (4-char prefix)
 	simple("github-pat", "ghp_", "[A-Za-z0-9]{36}", ALPHANUMERIC, 36),
@@ -200,8 +202,6 @@ export const BUILTIN_PATTERNS: readonly TokenPattern[] = [
 	// Twilio (2-char prefix)
 	simple("twilio", "SK", "[a-f0-9]{32}", HEX_LOWER, 32),
 
-	// Heuristic patterns (no prefix, entropy-based).
-	// These are ordered last so prefix-based patterns take priority.
 	heuristic("fastly", BASE64URL, 32, 32, 4.0, 3),
 	heuristic("aws-secret-key", BASE64, 40, 40, 4.0, 3),
 ];

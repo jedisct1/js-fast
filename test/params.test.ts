@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { FastCipher } from "../src/cipher.ts";
 import { calculateRecommendedParams } from "../src/params.ts";
 
 describe("calculateRecommendedParams", () => {
@@ -43,6 +44,36 @@ describe("calculateRecommendedParams", () => {
 		expect(fourSymbolWord.branchDist2).toBe(1);
 		expect(threeSymbolWord.branchDist1).toBe(1);
 		expect(threeSymbolWord.branchDist2).toBe(1);
+	});
+
+	test("supports five-symbol words", () => {
+		for (const radix of [4, 10, 62, 256]) {
+			const params = calculateRecommendedParams(radix, 5);
+			expect(params.branchDist1).toBe(3);
+			expect(params.branchDist2).toBe(1);
+
+			const cipher = FastCipher.create(params, new Uint8Array(16));
+			try {
+				const plaintext = new Uint8Array([0, 1, 2, 3, radix - 1]);
+				const tweak = new Uint8Array([1, 2, 3]);
+				expect(cipher.decrypt(cipher.encrypt(plaintext, tweak), tweak)).toEqual(
+					plaintext,
+				);
+			} finally {
+				cipher.destroy();
+			}
+		}
+	});
+
+	test("keeps branch distances within the cipher's bounds", () => {
+		for (let wordLength = 2; wordLength <= 256; wordLength++) {
+			const params = calculateRecommendedParams(10, wordLength);
+			expect(params.branchDist1).toBeLessThanOrEqual(wordLength - 2);
+			expect(params.branchDist2).toBeGreaterThan(0);
+			expect(params.branchDist2).toBeLessThanOrEqual(
+				wordLength - params.branchDist1 - 1,
+			);
+		}
 	});
 
 	test("rejects invalid radix and word length values", () => {

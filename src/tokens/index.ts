@@ -9,15 +9,40 @@ import {
 	DIGITS,
 	HEX_LOWER,
 } from "./alphabets.ts";
+import { cycleWalk } from "./cyclewalk.ts";
+import { TokenError, TokenFormatError, UnknownPatternError } from "./errors.ts";
 import { BUILTIN_PATTERNS, MIN_SEGMENT_LENGTH } from "./registry.ts";
 import { scan } from "./scanner.ts";
 import { transformBody } from "./transformer.ts";
-import type { Alphabet, TokenPattern, TokenSpan } from "./types.ts";
+import type {
+	HeuristicTokenPattern,
+	StructuredTokenPattern,
+	TokenPattern,
+	TokenSpan,
+} from "./types.ts";
+import {
+	formatStructured,
+	heuristicMarker,
+	parseStructured,
+	segmentClass,
+	tokenBody,
+} from "./validate.ts";
 
+export type { CycleWalkResult } from "./cyclewalk.ts";
+export { cycleWalk, MAX_CYCLE_STEPS } from "./cyclewalk.ts";
+export {
+	CycleWalkError,
+	TokenError,
+	TokenFormatError,
+	UnknownPatternError,
+} from "./errors.ts";
 export { BUILTIN_PATTERNS, MIN_SEGMENT_LENGTH } from "./registry.ts";
 export { scan } from "./scanner.ts";
 export type {
 	Alphabet,
+	HeuristicTokenPattern,
+	SimpleTokenPattern,
+	StructuredTokenPattern,
 	TokenPattern,
 	TokenSpan,
 } from "./types.ts";
@@ -36,32 +61,38 @@ export interface TokenEncryptorOptions {
 	tweak?: Uint8Array;
 }
 
+export interface TokenOptions {
+	/** Use the same tweak for encryption and decryption. */
+	tweak?: Uint8Array;
+}
+
 export interface EncryptedSpan {
-	/** Start position of the token in the original text. */
+	/** Zero-based start offset in the original text. */
 	start: number;
-	/** End position of the token in the original text. */
+	/** Exclusive end offset in the original text. */
 	end: number;
-	/** The full original token (prefix + body). */
 	original: string;
-	/** The full encrypted token (prefix + encrypted body, or marker + body for heuristic). */
+	/** Includes the marker for heuristic patterns. */
 	encrypted: string;
-	/** Name of the pattern that matched (e.g., "github-pat", "sendgrid"). */
 	patternName: string;
 }
 
 export interface EncryptResult {
-	/** The full encrypted text. */
 	text: string;
-	/** One entry per token that was encrypted. */
 	spans: EncryptedSpan[];
+}
+
+type Mode = "encrypt" | "decrypt";
+
+interface MarkerHit {
+	start: number;
+	end: number;
+	body: string;
+	pattern: HeuristicTokenPattern;
 }
 
 const AES_KEY_SIZE = 16;
 const textEncoder = new TextEncoder();
-
-function heuristicMarker(patternName: string): string {
-	return `[ENCRYPTED:${patternName}]`;
-}
 
 export class TokenEncryptor {
 	private readonly key: Uint8Array;
@@ -83,7 +114,19 @@ export class TokenEncryptor {
 		}
 	}
 
-	private getCipher(radix: number, wordLength: number): FastCipher {
+	private getCipher(
+		pattern: TokenPattern,
+		radix: number,
+		wordLength: number,
+	): FastCipher {
+		if (!Number.isInteger(radix) || radix < 4 || radix > 256) {
+			throw new TokenError(
+				`Unsupported alphabet radix for ${pattern.name} pattern`,
+			);
+		}
+		if (wordLength < 2) {
+			throw new TokenFormatError(pattern.name);
+		}
 		const k = `${radix}:${wordLength}`;
 		let cipher = this.cache.get(k);
 		if (!cipher) {
@@ -148,15 +191,23 @@ export class TokenEncryptor {
 		return { text: parts.join(""), spans };
 	}
 
+	/**
+	 * Decrypt the tokens found by scanning `text`.
+	 *
+	 * Encrypted text can contain another pattern's prefix by chance.
+	 * Use saved encrypted values and pattern names with `decryptToken()` when
+	 * recovery must be reliable.
+	 */
 	decrypt(text: string, options?: TokenEncryptorOptions): string {
 		this.assertAlive();
 		const patterns = this.activePatterns(options);
 		const prefixPatterns = patterns.filter((p) => p.kind !== "heuristic");
 		const heuristicPatterns = patterns.filter((p) => p.kind === "heuristic");
 
-		const spans = prefixPatterns.length === 0
-			? []
-			: scan(text, prefixPatterns, this.patterns);
+		const spans =
+			prefixPatterns.length === 0
+				? []
+				: scan(text, prefixPatterns, this.patterns);
 		const heuristicHits =
 			heuristicPatterns.length === 0
 				? []
@@ -176,10 +227,8 @@ export class TokenEncryptor {
 			if (hit && (!span || hit.start < span.start)) {
 				if (hit.start >= cursor) {
 					parts.push(text.slice(cursor, hit.start));
-					const tweak = this.makeTweak(hit.patternName, options?.tweak);
-					const cipher = this.getCipher(hit.alphabet.radix, hit.body.length);
 					parts.push(
-						transformBody(hit.body, hit.alphabet, cipher, "decrypt", tweak),
+						this.transform(hit.pattern, hit.body, "decrypt", options?.tweak),
 					);
 					cursor = hit.end;
 				}
@@ -187,11 +236,19 @@ export class TokenEncryptor {
 				continue;
 			}
 
-			if (!span) break;
-			if (span.start >= cursor) {
-				parts.push(text.slice(cursor, span.start));
-				parts.push(this.decryptSpan(span, options?.tweak));
-				cursor = span.end;
+			const nextSpan = spans[spanIndex]!;
+			if (nextSpan.start >= cursor) {
+				parts.push(text.slice(cursor, nextSpan.start));
+				parts.push(
+					nextSpan.pattern.prefix +
+						this.transform(
+							nextSpan.pattern,
+							nextSpan.body,
+							"decrypt",
+							options?.tweak,
+						),
+				);
+				cursor = nextSpan.end;
 			}
 			spanIndex++;
 		}
@@ -200,114 +257,119 @@ export class TokenEncryptor {
 		return parts.join("");
 	}
 
-	private encryptSpan(span: TokenSpan, extraTweak?: Uint8Array): string {
-		const { pattern, body } = span;
-		const tweak = this.makeTweak(pattern.name, extraTweak);
-
-		if (pattern.kind === "heuristic") {
-			const cipher = this.getCipher(pattern.bodyAlphabet.radix, body.length);
-			const encrypted = transformBody(
-				body,
-				pattern.bodyAlphabet,
-				cipher,
-				"encrypt",
-				tweak,
-			);
-			return heuristicMarker(pattern.name) + encrypted;
-		}
-
-		if (pattern.kind === "simple") {
-			const cipher = this.getCipher(pattern.bodyAlphabet.radix, body.length);
-			const encrypted = transformBody(
-				body,
-				pattern.bodyAlphabet,
-				cipher,
-				"encrypt",
-				tweak,
-			);
-			return pattern.prefix + encrypted;
-		}
-
-		// Structured token
-		const parsed = pattern.parse(body);
-		if (!parsed) return pattern.prefix + body;
-
-		const transformedSegments: string[] = [];
-		for (let i = 0; i < parsed.segments.length; i++) {
-			const seg = parsed.segments[i]!;
-			const alphabet = parsed.alphabets[i]!;
-
-			if (seg.length < MIN_SEGMENT_LENGTH) {
-				transformedSegments.push(seg);
-				continue;
-			}
-
-			const cipher = this.getCipher(alphabet.radix, seg.length);
-			transformedSegments.push(
-				transformBody(seg, alphabet, cipher, "encrypt", tweak),
-			);
-		}
-
-		return pattern.prefix + pattern.format(transformedSegments);
+	/**
+	 * Encrypt one complete token with a named pattern.
+	 *
+	 * The result matches the encrypted value returned by `encryptWithSpans()`.
+	 *
+	 * @throws UnknownPatternError if no registered pattern has that name.
+	 * @throws TokenFormatError if `plaintext` is not a complete token of the pattern.
+	 */
+	encryptToken(
+		plaintext: string,
+		patternName: string,
+		options?: TokenOptions,
+	): string {
+		this.assertAlive();
+		const pattern = this.patternByName(patternName);
+		const body = tokenBody(pattern, plaintext, "plain");
+		return (
+			this.encryptedLead(pattern) +
+			this.transform(pattern, body, "encrypt", options?.tweak)
+		);
 	}
 
-	private decryptSpan(span: TokenSpan, extraTweak?: Uint8Array): string {
+	/**
+	 * Decrypt one complete token with a named pattern.
+	 *
+	 * Use this with the encrypted value and pattern name from `encryptWithSpans()`
+	 * when recovery must be reliable.
+	 * Heuristic tokens must include their `[ENCRYPTED:<name>]` marker.
+	 *
+	 * @throws UnknownPatternError if no registered pattern has that name.
+	 * @throws TokenFormatError if `ciphertext` is not a complete token of the pattern.
+	 */
+	decryptToken(
+		ciphertext: string,
+		patternName: string,
+		options?: TokenOptions,
+	): string {
+		this.assertAlive();
+		const pattern = this.patternByName(patternName);
+		const body = tokenBody(pattern, ciphertext, "encrypted");
+		return (
+			pattern.prefix + this.transform(pattern, body, "decrypt", options?.tweak)
+		);
+	}
+
+	private patternByName(patternName: string): TokenPattern {
+		const pattern = this.patterns.find((p) => p.name === patternName);
+		if (!pattern) throw new UnknownPatternError();
+		return pattern;
+	}
+
+	private encryptedLead(pattern: TokenPattern): string {
+		return pattern.kind === "heuristic"
+			? heuristicMarker(pattern.name)
+			: pattern.prefix;
+	}
+
+	private encryptSpan(span: TokenSpan, extraTweak?: Uint8Array): string {
 		const { pattern, body } = span;
+		return (
+			this.encryptedLead(pattern) +
+			this.transform(pattern, body, "encrypt", extraTweak)
+		);
+	}
+
+	private transform(
+		pattern: TokenPattern,
+		body: string,
+		mode: Mode,
+		extraTweak?: Uint8Array,
+	): string {
 		const tweak = this.makeTweak(pattern.name, extraTweak);
-
-		if (pattern.kind === "simple") {
-			const cipher = this.getCipher(pattern.bodyAlphabet.radix, body.length);
-			const decrypted = transformBody(
-				body,
-				pattern.bodyAlphabet,
-				cipher,
-				"decrypt",
-				tweak,
-			);
-			return pattern.prefix + decrypted;
+		if (pattern.kind === "structured") {
+			return this.transformStructured(pattern, body, mode, tweak);
 		}
+		const cipher = this.getCipher(
+			pattern,
+			pattern.bodyAlphabet.radix,
+			body.length,
+		);
+		return transformBody(body, pattern.bodyAlphabet, cipher, mode, tweak);
+	}
 
-		// Structured token
-		if (pattern.kind !== "structured") return pattern.prefix + body;
-		const parsed = pattern.parse(body);
-		if (!parsed) return pattern.prefix + body;
+	private transformStructured(
+		pattern: StructuredTokenPattern,
+		body: string,
+		mode: Mode,
+		tweak: Uint8Array,
+	): string {
+		const parsed = parseStructured(pattern, body);
+		const transformed = [...parsed.segments];
 
-		const transformedSegments: string[] = [];
 		for (let i = 0; i < parsed.segments.length; i++) {
-			const seg = parsed.segments[i]!;
+			const segment = parsed.segments[i]!;
+			if (segment.length < MIN_SEGMENT_LENGTH) continue;
+
 			const alphabet = parsed.alphabets[i]!;
-
-			if (seg.length < MIN_SEGMENT_LENGTH) {
-				transformedSegments.push(seg);
-				continue;
-			}
-
-			const cipher = this.getCipher(alphabet.radix, seg.length);
-			transformedSegments.push(
-				transformBody(seg, alphabet, cipher, "decrypt", tweak),
-			);
+			const cipher = this.getCipher(pattern, alphabet.radix, segment.length);
+			transformed[i] = cycleWalk(
+				segment,
+				(value) => transformBody(value, alphabet, cipher, mode, tweak),
+				segmentClass(pattern, parsed, i),
+			).output;
 		}
 
-		return pattern.prefix + pattern.format(transformedSegments);
+		return formatStructured(pattern, transformed, parsed.alphabets);
 	}
 
 	private findHeuristicMarkerHits(
 		text: string,
 		patterns: readonly TokenPattern[],
-	): Array<{
-		start: number;
-		end: number;
-		body: string;
-		patternName: string;
-		alphabet: Alphabet;
-	}> {
-		const hits: Array<{
-			start: number;
-			end: number;
-			body: string;
-			patternName: string;
-			alphabet: Alphabet;
-		}> = [];
+	): MarkerHit[] {
+		const hits: MarkerHit[] = [];
 
 		for (const pattern of patterns) {
 			if (pattern.kind !== "heuristic") continue;
@@ -329,7 +391,6 @@ export class TokenEncryptor {
 				}
 
 				const bodyLen = bodyEnd - bodyStart;
-				// Reject if more alphabet chars follow — the body is overlong/malformed.
 				const trailingAlphaChar =
 					bodyEnd < text.length &&
 					pattern.bodyAlphabet.charToIndex.has(text[bodyEnd]!);
@@ -342,8 +403,7 @@ export class TokenEncryptor {
 						start: idx,
 						end: bodyEnd,
 						body: text.slice(bodyStart, bodyEnd),
-						patternName: pattern.name,
-						alphabet: pattern.bodyAlphabet,
+						pattern,
 					});
 					searchFrom = bodyEnd;
 				} else {
@@ -351,8 +411,6 @@ export class TokenEncryptor {
 				}
 			}
 		}
-
-		if (hits.length === 0) return hits;
 
 		hits.sort((a, b) => a.start - b.start);
 		return hits;

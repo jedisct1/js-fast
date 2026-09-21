@@ -20,7 +20,15 @@ export interface StructuredTokenPattern {
 	readonly prefix: string;
 	readonly fullRegex: string;
 	readonly trailingAlphabet: Alphabet;
+	/**
+	 * Split a valid body into segments and choose an alphabet for each one.
+	 *
+	 * Return `null` when the body is invalid.
+	 * Calling `parse(format(segments))` must return the same segments and alphabets.
+	 * Each alphabet must depend only on its own segment.
+	 */
 	parse(body: string): { segments: string[]; alphabets: Alphabet[] } | null;
+	/** Rebuild a body from parsed segments of the same lengths. */
 	format(segments: string[]): string;
 }
 

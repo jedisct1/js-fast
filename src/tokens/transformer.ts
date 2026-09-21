@@ -6,9 +6,7 @@ export function charsToIndices(body: string, alphabet: Alphabet): Uint8Array {
 	for (let i = 0; i < body.length; i++) {
 		const idx = alphabet.charToIndex.get(body[i]!);
 		if (idx === undefined) {
-			throw new Error(
-				`Character '${body[i]}' not in alphabet '${alphabet.name}'`,
-			);
+			throw new Error(`Character not in alphabet '${alphabet.name}'`);
 		}
 		indices[i] = idx;
 	}
