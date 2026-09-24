@@ -16,3 +16,4 @@ export interface SBoxPool {
  * Uses Fisher-Yates shuffle driven by AES-ECB PRNG.
  */
 export declare function generateSBoxPool(radix: number, count: number, keyMaterial: Uint8Array): SBoxPool;
+export declare function wipeSBoxPool(pool: SBoxPool): void;

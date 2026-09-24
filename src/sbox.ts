@@ -45,15 +45,27 @@ export function generateSBoxPool(
 	// Split key material (don't zeroize IV suffix for S-box generation)
 	const { key, iv } = splitKeyMaterial(keyMaterial, false);
 	const prng = new PrngState(key, iv);
-
-	const sboxes: SBox[] = [];
-	for (let i = 0; i < count; i++) {
-		sboxes.push(generateSBox(radix, prng));
-	}
-
-	prng.cleanup();
 	key.fill(0);
 	iv.fill(0);
 
-	return { sboxes, radix };
+	const pool: SBoxPool = { sboxes: [], radix };
+	try {
+		for (let i = 0; i < count; i++) {
+			pool.sboxes.push(generateSBox(radix, prng));
+		}
+	} catch (error) {
+		wipeSBoxPool(pool);
+		throw error;
+	} finally {
+		prng.cleanup();
+	}
+
+	return pool;
+}
+
+export function wipeSBoxPool(pool: SBoxPool): void {
+	for (const sbox of pool.sboxes) {
+		sbox.perm.fill(0);
+		sbox.inv.fill(0);
+	}
 }

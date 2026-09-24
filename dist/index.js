@@ -233,42 +233,41 @@ function deriveKey(masterKey, input, outputLength) {
 import { createCipheriv as createCipheriv2 } from "node:crypto";
 var AES_BLOCK_SIZE2 = 16;
 var AES_KEY_SIZE2 = 16;
+var ZEROS = new Uint8Array(4096);
+function incrementCounter(counter) {
+  for (let i = AES_BLOCK_SIZE2 - 1;i >= 0; i--) {
+    counter[i] = counter[i] + 1 & 255;
+    if (counter[i] !== 0)
+      break;
+  }
+}
 
 class PrngState {
-  key;
-  counter;
-  buffer = new Uint8Array(AES_BLOCK_SIZE2);
-  bufferPos = AES_BLOCK_SIZE2;
+  ctr;
+  buffer = new Uint8Array(0);
+  bufferPos = 0;
   constructor(key, nonce) {
-    this.key = new Uint8Array(key);
-    this.counter = new Uint8Array(nonce);
-  }
-  incrementCounter() {
-    for (let i = AES_BLOCK_SIZE2 - 1;i >= 0; i--) {
-      this.counter[i] = this.counter[i] + 1 & 255;
-      if (this.counter[i] !== 0)
-        break;
-    }
-  }
-  encryptBlock() {
-    const cipher = createCipheriv2("aes-128-ecb", this.key, null);
-    cipher.setAutoPadding(false);
-    const encrypted = cipher.update(this.counter);
-    cipher.final();
-    this.buffer.set(new Uint8Array(encrypted));
+    const counter = new Uint8Array(nonce);
+    incrementCounter(counter);
+    this.ctr = createCipheriv2("aes-128-ctr", key, counter);
+    counter.fill(0);
   }
   getBytes(output) {
     for (let offset = 0;offset < output.length; ) {
-      if (this.bufferPos === AES_BLOCK_SIZE2) {
-        this.incrementCounter();
-        this.encryptBlock();
-        this.bufferPos = 0;
-      }
-      const chunkLength = Math.min(output.length - offset, AES_BLOCK_SIZE2 - this.bufferPos);
+      if (this.bufferPos === this.buffer.length)
+        this.refill();
+      const chunkLength = Math.min(output.length - offset, this.buffer.length - this.bufferPos);
       output.set(this.buffer.subarray(this.bufferPos, this.bufferPos + chunkLength), offset);
       this.bufferPos += chunkLength;
       offset += chunkLength;
     }
+  }
+  refill() {
+    if (this.ctr === null)
+      throw new Error("PRNG has been cleaned up");
+    this.buffer.fill(0);
+    this.buffer = this.ctr.update(ZEROS);
+    this.bufferPos = 0;
   }
   nextU32() {
     const bytes = new Uint8Array(4);
@@ -290,10 +289,14 @@ class PrngState {
     }
   }
   cleanup() {
-    this.counter.fill(0);
     this.buffer.fill(0);
-    this.key.fill(0);
-    this.bufferPos = 0;
+    this.bufferPos = this.buffer.length;
+    if (this.ctr === null)
+      return;
+    try {
+      this.ctr.final();
+    } catch {}
+    this.ctr = null;
   }
 }
 function splitKeyMaterial(keyMaterial, zeroizeIvSuffix) {
@@ -305,17 +308,38 @@ function splitKeyMaterial(keyMaterial, zeroizeIvSuffix) {
   }
   return { key, iv };
 }
+function highByteSequence(numLayers, prng) {
+  const seq = new Uint32Array(numLayers);
+  const bytes = new Uint8Array(Math.min(4 * numLayers, ZEROS.length));
+  try {
+    for (let i = 0;i < numLayers; ) {
+      const chunk = bytes.subarray(0, Math.min(bytes.length, 4 * (numLayers - i)));
+      prng.getBytes(chunk);
+      for (let offset = 0;offset < chunk.length; offset += 4) {
+        seq[i++] = chunk[offset];
+      }
+    }
+  } finally {
+    bytes.fill(0);
+  }
+  return seq;
+}
 function generateSequence(numLayers, poolSize, keyMaterial) {
   const { key, iv } = splitKeyMaterial(keyMaterial, true);
   const prng = new PrngState(key, iv);
-  const seq = new Uint32Array(numLayers);
-  for (let i = 0;i < numLayers; i++) {
-    seq[i] = prng.uniform(poolSize);
-  }
-  prng.cleanup();
   key.fill(0);
   iv.fill(0);
-  return seq;
+  try {
+    if (poolSize === 256)
+      return highByteSequence(numLayers, prng);
+    const seq = new Uint32Array(numLayers);
+    for (let i = 0;i < numLayers; i++) {
+      seq[i] = prng.uniform(poolSize);
+    }
+    return seq;
+  } finally {
+    prng.cleanup();
+  }
 }
 
 // src/sbox.ts
@@ -337,38 +361,64 @@ function generateSBox(radix, prng) {
 function generateSBoxPool(radix, count, keyMaterial) {
   const { key, iv } = splitKeyMaterial(keyMaterial, false);
   const prng = new PrngState(key, iv);
-  const sboxes = [];
-  for (let i = 0;i < count; i++) {
-    sboxes.push(generateSBox(radix, prng));
-  }
-  prng.cleanup();
   key.fill(0);
   iv.fill(0);
-  return { sboxes, radix };
+  const pool = { sboxes: [], radix };
+  try {
+    for (let i = 0;i < count; i++) {
+      pool.sboxes.push(generateSBox(radix, prng));
+    }
+  } catch (error) {
+    wipeSBoxPool(pool);
+    throw error;
+  } finally {
+    prng.cleanup();
+  }
+  return pool;
+}
+function wipeSBoxPool(pool) {
+  for (const sbox of pool.sboxes) {
+    sbox.perm.fill(0);
+    sbox.inv.fill(0);
+  }
 }
 
 // src/cipher.ts
 var AES_KEY_SIZE3 = 16;
 var DERIVED_KEY_SIZE = 32;
+function deriveSBoxPool(params, key) {
+  const poolKeyMaterial = deriveKey(key, buildSetup1Input(params), DERIVED_KEY_SIZE);
+  try {
+    return generateSBoxPool(params.radix, params.sboxCount, poolKeyMaterial);
+  } finally {
+    poolKeyMaterial.fill(0);
+  }
+}
 
 class FastCipher {
   params;
   masterKey;
   sboxPool;
+  ownsPool;
   destroyed = false;
   cachedTweak = null;
   cachedSeq = null;
-  constructor(params, masterKey, sboxPool) {
+  constructor(params, masterKey, sboxPool, ownsPool) {
     this.params = params;
     this.masterKey = new Uint8Array(masterKey);
     this.sboxPool = sboxPool;
+    this.ownsPool = ownsPool;
   }
   static create(params, key) {
     FastCipher.validateParams(params, key);
-    const poolKeyMaterial = deriveKey(key, buildSetup1Input(params), DERIVED_KEY_SIZE);
-    const sboxPool = generateSBoxPool(params.radix, params.sboxCount, poolKeyMaterial);
-    poolKeyMaterial.fill(0);
-    return new FastCipher(params, key, sboxPool);
+    return new FastCipher(params, key, deriveSBoxPool(params, key), true);
+  }
+  static withSharedPool(params, key, pool) {
+    FastCipher.validateParams(params, key);
+    if (pool.radix !== params.radix || pool.sboxes.length !== params.sboxCount) {
+      throw new InvalidParametersError("S-box pool does not match the parameters");
+    }
+    return new FastCipher(params, key, pool, false);
   }
   static validateParams(params, key) {
     if (params.radix < 4 || params.radix > 256) {
@@ -408,8 +458,14 @@ class FastCipher {
       return this.cachedSeq;
     }
     const seqKeyMaterial = deriveKey(this.masterKey, buildSetup2Input(this.params, tweak), DERIVED_KEY_SIZE);
-    const seq = generateSequence(this.params.numLayers, this.params.sboxCount, seqKeyMaterial);
-    seqKeyMaterial.fill(0);
+    let seq;
+    try {
+      seq = generateSequence(this.params.numLayers, this.params.sboxCount, seqKeyMaterial);
+    } finally {
+      seqKeyMaterial.fill(0);
+    }
+    this.cachedSeq?.fill(0);
+    this.cachedTweak?.fill(0);
     this.cachedTweak = tweak.length === 0 ? null : new Uint8Array(tweak);
     this.cachedSeq = seq;
     return seq;
@@ -453,10 +509,8 @@ class FastCipher {
     this.cachedSeq = null;
     this.cachedTweak?.fill(0);
     this.cachedTweak = null;
-    for (const sbox of this.sboxPool.sboxes) {
-      sbox.perm.fill(0);
-      sbox.inv.fill(0);
-    }
+    if (this.ownsPool)
+      wipeSBoxPool(this.sboxPool);
     this.destroyed = true;
   }
 }

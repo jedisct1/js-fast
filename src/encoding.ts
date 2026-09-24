@@ -40,7 +40,9 @@ export function encodeParts(parts: Uint8Array[]): Uint8Array {
  * Build the setup1 input for S-box pool key derivation.
  * Parts: [LABEL_INSTANCE1, radix_be32, sboxCount_be32, LABEL_FPE_POOL]
  */
-export function buildSetup1Input(params: FastParams): Uint8Array {
+export function buildSetup1Input(
+	params: Pick<FastParams, "radix" | "sboxCount">,
+): Uint8Array {
 	return encodeParts([
 		LABEL_INSTANCE1,
 		writeU32Be(params.radix),

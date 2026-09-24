@@ -28,3 +28,23 @@ export class CycleWalkError extends TokenError {
 		super("Cycle walk did not converge");
 	}
 }
+
+/**
+ * Text or a token does not fit the wrapped format.
+ *
+ * Decryption throws it for a malformed `{ENCRYPTED:...}` candidate.
+ * Encryption throws it when the input already contains the opener, or when a
+ * detected token is too short, too long, or uses symbols outside `TOKEN67`.
+ */
+export class WrappedTokenFormatError extends TokenError {
+	override name = "WrappedTokenFormatError";
+}
+
+/** A wrapped token failed its check after decryption. */
+export class WrappedTokenIntegrityError extends TokenError {
+	override name = "WrappedTokenIntegrityError";
+
+	constructor() {
+		super("Encrypted token failed verification");
+	}
+}

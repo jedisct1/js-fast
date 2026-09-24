@@ -233,42 +233,41 @@ function deriveKey(masterKey, input, outputLength) {
 import { createCipheriv as createCipheriv2 } from "node:crypto";
 var AES_BLOCK_SIZE2 = 16;
 var AES_KEY_SIZE2 = 16;
+var ZEROS = new Uint8Array(4096);
+function incrementCounter(counter) {
+  for (let i = AES_BLOCK_SIZE2 - 1;i >= 0; i--) {
+    counter[i] = counter[i] + 1 & 255;
+    if (counter[i] !== 0)
+      break;
+  }
+}
 
 class PrngState {
-  key;
-  counter;
-  buffer = new Uint8Array(AES_BLOCK_SIZE2);
-  bufferPos = AES_BLOCK_SIZE2;
+  ctr;
+  buffer = new Uint8Array(0);
+  bufferPos = 0;
   constructor(key, nonce) {
-    this.key = new Uint8Array(key);
-    this.counter = new Uint8Array(nonce);
-  }
-  incrementCounter() {
-    for (let i = AES_BLOCK_SIZE2 - 1;i >= 0; i--) {
-      this.counter[i] = this.counter[i] + 1 & 255;
-      if (this.counter[i] !== 0)
-        break;
-    }
-  }
-  encryptBlock() {
-    const cipher = createCipheriv2("aes-128-ecb", this.key, null);
-    cipher.setAutoPadding(false);
-    const encrypted = cipher.update(this.counter);
-    cipher.final();
-    this.buffer.set(new Uint8Array(encrypted));
+    const counter = new Uint8Array(nonce);
+    incrementCounter(counter);
+    this.ctr = createCipheriv2("aes-128-ctr", key, counter);
+    counter.fill(0);
   }
   getBytes(output) {
     for (let offset = 0;offset < output.length; ) {
-      if (this.bufferPos === AES_BLOCK_SIZE2) {
-        this.incrementCounter();
-        this.encryptBlock();
-        this.bufferPos = 0;
-      }
-      const chunkLength = Math.min(output.length - offset, AES_BLOCK_SIZE2 - this.bufferPos);
+      if (this.bufferPos === this.buffer.length)
+        this.refill();
+      const chunkLength = Math.min(output.length - offset, this.buffer.length - this.bufferPos);
       output.set(this.buffer.subarray(this.bufferPos, this.bufferPos + chunkLength), offset);
       this.bufferPos += chunkLength;
       offset += chunkLength;
     }
+  }
+  refill() {
+    if (this.ctr === null)
+      throw new Error("PRNG has been cleaned up");
+    this.buffer.fill(0);
+    this.buffer = this.ctr.update(ZEROS);
+    this.bufferPos = 0;
   }
   nextU32() {
     const bytes = new Uint8Array(4);
@@ -290,10 +289,14 @@ class PrngState {
     }
   }
   cleanup() {
-    this.counter.fill(0);
     this.buffer.fill(0);
-    this.key.fill(0);
-    this.bufferPos = 0;
+    this.bufferPos = this.buffer.length;
+    if (this.ctr === null)
+      return;
+    try {
+      this.ctr.final();
+    } catch {}
+    this.ctr = null;
   }
 }
 function splitKeyMaterial(keyMaterial, zeroizeIvSuffix) {
@@ -305,17 +308,38 @@ function splitKeyMaterial(keyMaterial, zeroizeIvSuffix) {
   }
   return { key, iv };
 }
+function highByteSequence(numLayers, prng) {
+  const seq = new Uint32Array(numLayers);
+  const bytes = new Uint8Array(Math.min(4 * numLayers, ZEROS.length));
+  try {
+    for (let i = 0;i < numLayers; ) {
+      const chunk = bytes.subarray(0, Math.min(bytes.length, 4 * (numLayers - i)));
+      prng.getBytes(chunk);
+      for (let offset = 0;offset < chunk.length; offset += 4) {
+        seq[i++] = chunk[offset];
+      }
+    }
+  } finally {
+    bytes.fill(0);
+  }
+  return seq;
+}
 function generateSequence(numLayers, poolSize, keyMaterial) {
   const { key, iv } = splitKeyMaterial(keyMaterial, true);
   const prng = new PrngState(key, iv);
-  const seq = new Uint32Array(numLayers);
-  for (let i = 0;i < numLayers; i++) {
-    seq[i] = prng.uniform(poolSize);
-  }
-  prng.cleanup();
   key.fill(0);
   iv.fill(0);
-  return seq;
+  try {
+    if (poolSize === 256)
+      return highByteSequence(numLayers, prng);
+    const seq = new Uint32Array(numLayers);
+    for (let i = 0;i < numLayers; i++) {
+      seq[i] = prng.uniform(poolSize);
+    }
+    return seq;
+  } finally {
+    prng.cleanup();
+  }
 }
 
 // src/sbox.ts
@@ -337,38 +361,64 @@ function generateSBox(radix, prng) {
 function generateSBoxPool(radix, count, keyMaterial) {
   const { key, iv } = splitKeyMaterial(keyMaterial, false);
   const prng = new PrngState(key, iv);
-  const sboxes = [];
-  for (let i = 0;i < count; i++) {
-    sboxes.push(generateSBox(radix, prng));
-  }
-  prng.cleanup();
   key.fill(0);
   iv.fill(0);
-  return { sboxes, radix };
+  const pool = { sboxes: [], radix };
+  try {
+    for (let i = 0;i < count; i++) {
+      pool.sboxes.push(generateSBox(radix, prng));
+    }
+  } catch (error) {
+    wipeSBoxPool(pool);
+    throw error;
+  } finally {
+    prng.cleanup();
+  }
+  return pool;
+}
+function wipeSBoxPool(pool) {
+  for (const sbox of pool.sboxes) {
+    sbox.perm.fill(0);
+    sbox.inv.fill(0);
+  }
 }
 
 // src/cipher.ts
 var AES_KEY_SIZE3 = 16;
 var DERIVED_KEY_SIZE = 32;
+function deriveSBoxPool(params, key) {
+  const poolKeyMaterial = deriveKey(key, buildSetup1Input(params), DERIVED_KEY_SIZE);
+  try {
+    return generateSBoxPool(params.radix, params.sboxCount, poolKeyMaterial);
+  } finally {
+    poolKeyMaterial.fill(0);
+  }
+}
 
 class FastCipher {
   params;
   masterKey;
   sboxPool;
+  ownsPool;
   destroyed = false;
   cachedTweak = null;
   cachedSeq = null;
-  constructor(params, masterKey, sboxPool) {
+  constructor(params, masterKey, sboxPool, ownsPool) {
     this.params = params;
     this.masterKey = new Uint8Array(masterKey);
     this.sboxPool = sboxPool;
+    this.ownsPool = ownsPool;
   }
   static create(params, key) {
     FastCipher.validateParams(params, key);
-    const poolKeyMaterial = deriveKey(key, buildSetup1Input(params), DERIVED_KEY_SIZE);
-    const sboxPool = generateSBoxPool(params.radix, params.sboxCount, poolKeyMaterial);
-    poolKeyMaterial.fill(0);
-    return new FastCipher(params, key, sboxPool);
+    return new FastCipher(params, key, deriveSBoxPool(params, key), true);
+  }
+  static withSharedPool(params, key, pool) {
+    FastCipher.validateParams(params, key);
+    if (pool.radix !== params.radix || pool.sboxes.length !== params.sboxCount) {
+      throw new InvalidParametersError("S-box pool does not match the parameters");
+    }
+    return new FastCipher(params, key, pool, false);
   }
   static validateParams(params, key) {
     if (params.radix < 4 || params.radix > 256) {
@@ -408,8 +458,14 @@ class FastCipher {
       return this.cachedSeq;
     }
     const seqKeyMaterial = deriveKey(this.masterKey, buildSetup2Input(this.params, tweak), DERIVED_KEY_SIZE);
-    const seq = generateSequence(this.params.numLayers, this.params.sboxCount, seqKeyMaterial);
-    seqKeyMaterial.fill(0);
+    let seq;
+    try {
+      seq = generateSequence(this.params.numLayers, this.params.sboxCount, seqKeyMaterial);
+    } finally {
+      seqKeyMaterial.fill(0);
+    }
+    this.cachedSeq?.fill(0);
+    this.cachedTweak?.fill(0);
     this.cachedTweak = tweak.length === 0 ? null : new Uint8Array(tweak);
     this.cachedSeq = seq;
     return seq;
@@ -453,10 +509,8 @@ class FastCipher {
     this.cachedSeq = null;
     this.cachedTweak?.fill(0);
     this.cachedTweak = null;
-    for (const sbox of this.sboxPool.sboxes) {
-      sbox.perm.fill(0);
-      sbox.inv.fill(0);
-    }
+    if (this.ownsPool)
+      wipeSBoxPool(this.sboxPool);
     this.destroyed = true;
   }
 }
@@ -598,6 +652,7 @@ var ALPHANUMERIC_LOWER = makeAlphabet("alphanumeric-lower", "0123456789abcdefghi
 var ALPHANUMERIC = makeAlphabet("alphanumeric", "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
 var BASE64 = makeAlphabet("base64", "+/0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
 var BASE64URL = makeAlphabet("base64url", "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz-");
+var TOKEN67 = makeAlphabet("token67", "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/-_.");
 
 // src/tokens/errors.ts
 class TokenError extends Error {
@@ -621,6 +676,17 @@ class CycleWalkError extends TokenError {
   name = "CycleWalkError";
   constructor() {
     super("Cycle walk did not converge");
+  }
+}
+
+class WrappedTokenFormatError extends TokenError {
+  name = "WrappedTokenFormatError";
+}
+
+class WrappedTokenIntegrityError extends TokenError {
+  name = "WrappedTokenIntegrityError";
+  constructor() {
+    super("Encrypted token failed verification");
   }
 }
 
@@ -1148,14 +1214,264 @@ function transformBody(body, alphabet, cipher, mode, tweak) {
   const result = mode === "encrypt" ? cipher.encrypt(indices, tweak) : cipher.decrypt(indices, tweak);
   return indicesToChars(result, alphabet);
 }
+
+// src/tokens/wrapped.ts
+var WRAPPED_OPENER = "{ENCRYPTED:";
+var WRAPPED_CLOSER = "}";
+var CHECK_SUFFIX = "00000000";
+var CHECK_SYMBOLS = CHECK_SUFFIX.length;
+var MIN_WRAPPED_TOKEN_LENGTH = 2;
+var DEFAULT_MAX_WRAPPED_TOKEN_LENGTH = 512;
+var MAX_WRAPPED_TOKEN_LENGTH = 4096;
+var MIN_PAYLOAD_LENGTH = MIN_WRAPPED_TOKEN_LENGTH + CHECK_SYMBOLS;
+var RADIX = 67;
+var SBOX_COUNT = 256;
+var SECURITY_LEVEL = 128;
+var WRAPPER_KEY_SIZE = 16;
+var textEncoder = new TextEncoder;
+var WRAPPER_KEY_INPUT = encodeParts([
+  textEncoder.encode("fast-cipher/tokens/wrapped/v1/key")
+]);
+var WRAPPER_TWEAK_LABEL = textEncoder.encode("fast-cipher/tokens/wrapped/v1/tweak");
+var ROUND_WORD_LENGTHS = [
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  12,
+  16,
+  32,
+  50,
+  64,
+  100
+];
+var ROUNDS_RADIX_16 = [
+  67,
+  55,
+  48,
+  43,
+  39,
+  36,
+  35,
+  34,
+  34,
+  33,
+  33,
+  35,
+  38,
+  41,
+  47
+];
+var ROUNDS_RADIX_100 = [
+  40,
+  33,
+  28,
+  27,
+  26,
+  26,
+  25,
+  25,
+  25,
+  26,
+  26,
+  30,
+  34,
+  37,
+  44
+];
+var RADIX_67_WEIGHT = (Math.log(67) - Math.log(16)) / (Math.log(100) - Math.log(16));
+function interpolateRounds(row, n) {
+  const last = ROUND_WORD_LENGTHS.length - 1;
+  if (n <= ROUND_WORD_LENGTHS[0])
+    return row[0];
+  if (n >= ROUND_WORD_LENGTHS[last]) {
+    return row[last] * Math.sqrt(n / ROUND_WORD_LENGTHS[last]);
+  }
+  let i = 1;
+  while (n > ROUND_WORD_LENGTHS[i])
+    i++;
+  const x0 = ROUND_WORD_LENGTHS[i - 1];
+  const x1 = ROUND_WORD_LENGTHS[i];
+  const y0 = row[i - 1];
+  return y0 + (n - x0) / (x1 - x0) * (row[i] - y0);
+}
+function wrappedParams(n) {
+  const r16 = interpolateRounds(ROUNDS_RADIX_16, n);
+  const r100 = interpolateRounds(ROUNDS_RADIX_100, n);
+  const rawRounds = r16 + RADIX_67_WEIGHT * (r100 - r16);
+  const branchDist1 = n <= 2 ? 0 : Math.min(Math.ceil(Math.sqrt(n)), n - 2);
+  const branchDist2 = Math.min(branchDist1 > 1 ? branchDist1 - 1 : 1, n - branchDist1 - 1);
+  return {
+    radix: RADIX,
+    wordLength: n,
+    sboxCount: SBOX_COUNT,
+    numLayers: Math.ceil(Math.max(1, rawRounds)) * n,
+    branchDist1,
+    branchDist2,
+    securityLevel: SECURITY_LEVEL
+  };
+}
+function deriveWrapperKey(masterKey) {
+  return deriveKey(masterKey, WRAPPER_KEY_INPUT, WRAPPER_KEY_SIZE);
+}
+function wrapperTweak(tweak) {
+  if (tweak !== undefined && !(tweak instanceof Uint8Array)) {
+    throw new TypeError("tweak must be a Uint8Array");
+  }
+  return encodeParts([WRAPPER_TWEAK_LABEL, tweak ?? new Uint8Array(0)]);
+}
+function resolveMaxTokenLength(value) {
+  if (value === undefined)
+    return DEFAULT_MAX_WRAPPED_TOKEN_LENGTH;
+  if (!Number.isSafeInteger(value) || value < MIN_WRAPPED_TOKEN_LENGTH || value > MAX_WRAPPED_TOKEN_LENGTH) {
+    throw new RangeError(`maxTokenLength must be an integer from ${MIN_WRAPPED_TOKEN_LENGTH} to ${MAX_WRAPPED_TOKEN_LENGTH}`);
+  }
+  return value;
+}
+function isPreserveMode(value) {
+  if (value === undefined || value === "throw")
+    return false;
+  if (value === "preserve")
+    return true;
+  throw new RangeError('onInvalid must be "throw" or "preserve"');
+}
+function assertWrappable(token, maxTokenLength) {
+  if (token.length < MIN_WRAPPED_TOKEN_LENGTH) {
+    throw new WrappedTokenFormatError("Token is too short to wrap");
+  }
+  if (token.length > maxTokenLength) {
+    throw new WrappedTokenFormatError("Token is longer than maxTokenLength allows");
+  }
+  if (!isInAlphabet(token, TOKEN67)) {
+    throw new WrappedTokenFormatError("Token contains a symbol outside TOKEN67");
+  }
+}
+
+class WrappedTokenCipher {
+  key;
+  pool;
+  destroyed = false;
+  constructor(key, pool) {
+    this.key = key;
+    this.pool = pool;
+  }
+  static create(masterKey) {
+    const key = deriveWrapperKey(masterKey);
+    try {
+      const pool = deriveSBoxPool({ radix: RADIX, sboxCount: SBOX_COUNT }, key);
+      return new WrappedTokenCipher(key, pool);
+    } catch (error) {
+      key.fill(0);
+      throw error;
+    }
+  }
+  wrap(token, tweak) {
+    const word = charsToIndices(token + CHECK_SUFFIX, TOKEN67);
+    try {
+      const ciphertext = this.transform(word, "encrypt", tweak);
+      return WRAPPED_OPENER + indicesToChars(ciphertext, TOKEN67) + WRAPPED_CLOSER;
+    } finally {
+      word.fill(0);
+    }
+  }
+  unwrap(payload, tweak) {
+    const word = this.transform(charsToIndices(payload, TOKEN67), "decrypt", tweak);
+    try {
+      const tokenLength = word.length - CHECK_SYMBOLS;
+      let check = 0;
+      for (let i = tokenLength;i < word.length; i++) {
+        check |= word[i];
+      }
+      if (check !== 0)
+        return null;
+      return indicesToChars(word.subarray(0, tokenLength), TOKEN67);
+    } finally {
+      word.fill(0);
+    }
+  }
+  transform(word, mode, tweak) {
+    if (this.destroyed) {
+      throw new Error("Wrapped token cipher has been destroyed");
+    }
+    const cipher = FastCipher.withSharedPool(wrappedParams(word.length), this.key, this.pool);
+    try {
+      return mode === "encrypt" ? cipher.encrypt(word, tweak) : cipher.decrypt(word, tweak);
+    } finally {
+      cipher.destroy();
+    }
+  }
+  destroy() {
+    this.destroyed = true;
+    this.key.fill(0);
+    wipeSBoxPool(this.pool);
+  }
+}
+var FRAMING_MESSAGES = {
+  unterminated: "Encrypted token has an invalid symbol or no closing brace",
+  "too-short": "Encrypted token is too short",
+  "too-long": "Encrypted token is longer than maxTokenLength allows"
+};
+function* wrappedCandidates(text, maxTokenLength) {
+  const maxPayloadLength = maxTokenLength + CHECK_SYMBOLS;
+  let start = text.indexOf(WRAPPED_OPENER);
+  while (start !== -1) {
+    const payloadStart = start + WRAPPED_OPENER.length;
+    let payloadEnd = payloadStart;
+    while (TOKEN67.charToIndex.has(text[payloadEnd]))
+      payloadEnd++;
+    const closed = text[payloadEnd] === WRAPPED_CLOSER;
+    const length = payloadEnd - payloadStart;
+    let framing = "valid";
+    if (!closed)
+      framing = "unterminated";
+    else if (length < MIN_PAYLOAD_LENGTH)
+      framing = "too-short";
+    else if (length > maxPayloadLength)
+      framing = "too-long";
+    const end = closed ? payloadEnd + 1 : payloadEnd;
+    yield { start, end, payloadEnd, framing };
+    start = text.indexOf(WRAPPED_OPENER, end);
+  }
+}
+function unwrapText(text, maxTokenLength, preserve, open) {
+  if (!preserve) {
+    for (const candidate of wrappedCandidates(text, maxTokenLength)) {
+      if (candidate.framing !== "valid") {
+        throw new WrappedTokenFormatError(FRAMING_MESSAGES[candidate.framing]);
+      }
+    }
+  }
+  const parts = [];
+  let cursor = 0;
+  let preservedCandidates = 0;
+  for (const candidate of wrappedCandidates(text, maxTokenLength)) {
+    const token = candidate.framing === "valid" ? open(text.slice(candidate.start + WRAPPED_OPENER.length, candidate.payloadEnd)) : null;
+    if (token === null) {
+      if (!preserve)
+        throw new WrappedTokenIntegrityError;
+      preservedCandidates++;
+      continue;
+    }
+    parts.push(text.slice(cursor, candidate.start), token);
+    cursor = candidate.end;
+  }
+  parts.push(text.slice(cursor));
+  return { text: parts.join(""), preservedCandidates };
+}
 // src/tokens/index.ts
 var AES_KEY_SIZE4 = 16;
-var textEncoder = new TextEncoder;
+var textEncoder2 = new TextEncoder;
 
 class TokenEncryptor {
   key;
   cache = new Map;
   patterns;
+  wrapped = null;
   destroyed = false;
   constructor(key) {
     if (key.length !== AES_KEY_SIZE4) {
@@ -1176,6 +1492,7 @@ class TokenEncryptor {
     if (wordLength < 2) {
       throw new TokenFormatError(pattern.name);
     }
+    this.assertAlive();
     const k = `${radix}:${wordLength}`;
     let cipher = this.cache.get(k);
     if (!cipher) {
@@ -1186,7 +1503,7 @@ class TokenEncryptor {
     return cipher;
   }
   makeTweak(patternName, extra) {
-    const nameBytes = textEncoder.encode(patternName);
+    const nameBytes = textEncoder2.encode(patternName);
     if (!extra || extra.length === 0)
       return nameBytes;
     const combined = new Uint8Array(nameBytes.length + 1 + extra.length);
@@ -1346,6 +1663,51 @@ class TokenEncryptor {
     hits.sort((a, b) => a.start - b.start);
     return hits;
   }
+  encryptWrapped(text, options) {
+    this.assertAlive();
+    const maxTokenLength = resolveMaxTokenLength(options?.maxTokenLength);
+    if (options?.types !== undefined && !Array.isArray(options.types)) {
+      throw new TypeError("types must be an array of pattern names");
+    }
+    const tweak = wrapperTweak(options?.tweak);
+    try {
+      if (text.includes(WRAPPED_OPENER)) {
+        throw new WrappedTokenFormatError("Text already contains an encrypted token opener");
+      }
+      const spans = scan(text, this.activePatterns(options), this.patterns);
+      for (const span of spans) {
+        assertWrappable(text.slice(span.start, span.end), maxTokenLength);
+      }
+      const parts = [];
+      let cursor = 0;
+      for (const span of spans) {
+        const token = text.slice(span.start, span.end);
+        parts.push(text.slice(cursor, span.start), this.wrappedCipher().wrap(token, tweak));
+        cursor = span.end;
+      }
+      parts.push(text.slice(cursor));
+      return parts.join("");
+    } finally {
+      tweak.fill(0);
+    }
+  }
+  decryptWrapped(text, options) {
+    this.assertAlive();
+    const maxTokenLength = resolveMaxTokenLength(options?.maxTokenLength);
+    const preserve = isPreserveMode(options?.onInvalid);
+    const tweak = wrapperTweak(options?.tweak);
+    try {
+      const result = unwrapText(text, maxTokenLength, preserve, (payload) => this.wrappedCipher().unwrap(payload, tweak));
+      return preserve ? result : result.text;
+    } finally {
+      tweak.fill(0);
+    }
+  }
+  wrappedCipher() {
+    this.assertAlive();
+    this.wrapped ??= WrappedTokenCipher.create(this.key);
+    return this.wrapped;
+  }
   register(pattern) {
     this.assertAlive();
     this.patterns.unshift(pattern);
@@ -1356,15 +1718,20 @@ class TokenEncryptor {
     for (const cipher of this.cache.values())
       cipher.destroy();
     this.cache.clear();
+    this.wrapped?.destroy();
+    this.wrapped = null;
   }
 }
 export {
   scan,
   cycleWalk,
+  WrappedTokenIntegrityError,
+  WrappedTokenFormatError,
   UnknownPatternError,
   TokenFormatError,
   TokenError,
   TokenEncryptor,
+  TOKEN67,
   MIN_SEGMENT_LENGTH,
   MAX_CYCLE_STEPS,
   HEX_LOWER,

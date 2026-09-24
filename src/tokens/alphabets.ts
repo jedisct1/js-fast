@@ -39,3 +39,9 @@ export const BASE64URL: Alphabet = makeAlphabet(
 	"base64url",
 	"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz-",
 );
+
+/** The fixed alphabet of wrapped tokens; see `encryptWrapped()`. */
+export const TOKEN67: Alphabet = makeAlphabet(
+	"token67",
+	"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/-_.",
+);

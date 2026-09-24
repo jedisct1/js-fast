@@ -3,6 +3,7 @@ import { buildSetup1Input, buildSetup2Input } from "./encoding.ts";
 import {
 	InvalidBranchDistError,
 	InvalidLengthError,
+	InvalidParametersError,
 	InvalidRadixError,
 	InvalidSBoxCountError,
 	InvalidValueError,
@@ -11,16 +12,39 @@ import {
 import { deriveKey } from "./prf.ts";
 import { generateSequence } from "./prng.ts";
 import type { SBoxPool } from "./sbox.ts";
-import { generateSBoxPool } from "./sbox.ts";
+import { generateSBoxPool, wipeSBoxPool } from "./sbox.ts";
 import type { FastParams } from "./types.ts";
 
 const AES_KEY_SIZE = 16;
 const DERIVED_KEY_SIZE = 32;
 
+/**
+ * Derive the S-box pool for `key`.
+ *
+ * The pool depends only on the key, radix, and S-box count, so ciphers with
+ * other word lengths or tweaks can share it.
+ */
+export function deriveSBoxPool(
+	params: Pick<FastParams, "radix" | "sboxCount">,
+	key: Uint8Array,
+): SBoxPool {
+	const poolKeyMaterial = deriveKey(
+		key,
+		buildSetup1Input(params),
+		DERIVED_KEY_SIZE,
+	);
+	try {
+		return generateSBoxPool(params.radix, params.sboxCount, poolKeyMaterial);
+	} finally {
+		poolKeyMaterial.fill(0);
+	}
+}
+
 export class FastCipher {
 	readonly params: FastParams;
 	private readonly masterKey: Uint8Array;
 	private readonly sboxPool: SBoxPool;
+	private readonly ownsPool: boolean;
 	private destroyed = false;
 	private cachedTweak: Uint8Array | null = null;
 	private cachedSeq: Uint32Array | null = null;
@@ -29,28 +53,42 @@ export class FastCipher {
 		params: FastParams,
 		masterKey: Uint8Array,
 		sboxPool: SBoxPool,
+		ownsPool: boolean,
 	) {
 		this.params = params;
 		this.masterKey = new Uint8Array(masterKey);
 		this.sboxPool = sboxPool;
+		this.ownsPool = ownsPool;
 	}
 
 	static create(params: FastParams, key: Uint8Array): FastCipher {
 		FastCipher.validateParams(params, key);
+		return new FastCipher(params, key, deriveSBoxPool(params, key), true);
+	}
 
-		const poolKeyMaterial = deriveKey(
-			key,
-			buildSetup1Input(params),
-			DERIVED_KEY_SIZE,
-		);
-		const sboxPool = generateSBoxPool(
-			params.radix,
-			params.sboxCount,
-			poolKeyMaterial,
-		);
-		poolKeyMaterial.fill(0);
-
-		return new FastCipher(params, key, sboxPool);
+	/**
+	 * Create a cipher that borrows a pool from `deriveSBoxPool()`.
+	 *
+	 * The pool must come from the same key, radix, and S-box count.
+	 * `destroy()` wipes the cipher's own copies but leaves the pool to its owner.
+	 *
+	 * @internal
+	 */
+	static withSharedPool(
+		params: FastParams,
+		key: Uint8Array,
+		pool: SBoxPool,
+	): FastCipher {
+		FastCipher.validateParams(params, key);
+		if (
+			pool.radix !== params.radix ||
+			pool.sboxes.length !== params.sboxCount
+		) {
+			throw new InvalidParametersError(
+				"S-box pool does not match the parameters",
+			);
+		}
+		return new FastCipher(params, key, pool, false);
 	}
 
 	private static validateParams(params: FastParams, key: Uint8Array): void {
@@ -116,13 +154,19 @@ export class FastCipher {
 			buildSetup2Input(this.params, tweak),
 			DERIVED_KEY_SIZE,
 		);
-		const seq = generateSequence(
-			this.params.numLayers,
-			this.params.sboxCount,
-			seqKeyMaterial,
-		);
-		seqKeyMaterial.fill(0);
+		let seq: Uint32Array;
+		try {
+			seq = generateSequence(
+				this.params.numLayers,
+				this.params.sboxCount,
+				seqKeyMaterial,
+			);
+		} finally {
+			seqKeyMaterial.fill(0);
+		}
 
+		this.cachedSeq?.fill(0);
+		this.cachedTweak?.fill(0);
 		this.cachedTweak = tweak.length === 0 ? null : new Uint8Array(tweak);
 		this.cachedSeq = seq;
 
@@ -190,10 +234,7 @@ export class FastCipher {
 		this.cachedSeq = null;
 		this.cachedTweak?.fill(0);
 		this.cachedTweak = null;
-		for (const sbox of this.sboxPool.sboxes) {
-			sbox.perm.fill(0);
-			sbox.inv.fill(0);
-		}
+		if (this.ownsPool) wipeSBoxPool(this.sboxPool);
 		this.destroyed = true;
 	}
 }

@@ -1,49 +1,42 @@
-import { createCipheriv } from "node:crypto";
+import { type Cipheriv, createCipheriv } from "node:crypto";
 
 const AES_BLOCK_SIZE = 16;
 const AES_KEY_SIZE = 16;
+const ZEROS = new Uint8Array(4096);
+
+function incrementCounter(counter: Uint8Array): void {
+	for (let i = AES_BLOCK_SIZE - 1; i >= 0; i--) {
+		counter[i] = (counter[i]! + 1) & 0xff;
+		if (counter[i] !== 0) break;
+	}
+}
 
 /**
- * Deterministic PRNG state using AES-128 ECB encryption of an incrementing counter.
+ * Deterministic PRNG: AES-128 encryption of an incrementing counter.
  * Matches the C and Zig reference implementations exactly.
+ *
+ * They increment the counter before each block, so the stream is AES-128-CTR
+ * starting from `nonce + 1`.
  */
 export class PrngState {
-	private readonly key: Uint8Array;
-	private readonly counter: Uint8Array;
-	private readonly buffer = new Uint8Array(AES_BLOCK_SIZE);
-	private bufferPos = AES_BLOCK_SIZE;
+	private ctr: Cipheriv | null;
+	private buffer = new Uint8Array(0);
+	private bufferPos = 0;
 
 	constructor(key: Uint8Array, nonce: Uint8Array) {
-		this.key = new Uint8Array(key);
-		this.counter = new Uint8Array(nonce);
-	}
-
-	private incrementCounter(): void {
-		for (let i = AES_BLOCK_SIZE - 1; i >= 0; i--) {
-			this.counter[i] = (this.counter[i]! + 1) & 0xff;
-			if (this.counter[i] !== 0) break;
-		}
-	}
-
-	private encryptBlock(): void {
-		const cipher = createCipheriv("aes-128-ecb", this.key, null);
-		cipher.setAutoPadding(false);
-		const encrypted = cipher.update(this.counter);
-		cipher.final();
-		this.buffer.set(new Uint8Array(encrypted));
+		const counter = new Uint8Array(nonce);
+		incrementCounter(counter);
+		this.ctr = createCipheriv("aes-128-ctr", key, counter);
+		counter.fill(0);
 	}
 
 	getBytes(output: Uint8Array): void {
 		for (let offset = 0; offset < output.length; ) {
-			if (this.bufferPos === AES_BLOCK_SIZE) {
-				this.incrementCounter();
-				this.encryptBlock();
-				this.bufferPos = 0;
-			}
+			if (this.bufferPos === this.buffer.length) this.refill();
 
 			const chunkLength = Math.min(
 				output.length - offset,
-				AES_BLOCK_SIZE - this.bufferPos,
+				this.buffer.length - this.bufferPos,
 			);
 			output.set(
 				this.buffer.subarray(this.bufferPos, this.bufferPos + chunkLength),
@@ -52,6 +45,13 @@ export class PrngState {
 			this.bufferPos += chunkLength;
 			offset += chunkLength;
 		}
+	}
+
+	private refill(): void {
+		if (this.ctr === null) throw new Error("PRNG has been cleaned up");
+		this.buffer.fill(0);
+		this.buffer = this.ctr.update(ZEROS);
+		this.bufferPos = 0;
 	}
 
 	nextU32(): number {
@@ -86,10 +86,15 @@ export class PrngState {
 	}
 
 	cleanup(): void {
-		this.counter.fill(0);
 		this.buffer.fill(0);
-		this.key.fill(0);
-		this.bufferPos = 0;
+		this.bufferPos = this.buffer.length;
+		if (this.ctr === null) return;
+		try {
+			this.ctr.final();
+		} catch {
+			// Cleanup runs in finally blocks and must not replace their error.
+		}
+		this.ctr = null;
 	}
 }
 
@@ -111,6 +116,31 @@ export function splitKeyMaterial(
 }
 
 /**
+ * With 256 S-boxes, `uniform(256)` never rejects a sample and returns the
+ * high byte of each big-endian `nextU32()`.
+ * Element `i` is therefore byte `4 * i` of the PRNG stream.
+ */
+function highByteSequence(numLayers: number, prng: PrngState): Uint32Array {
+	const seq = new Uint32Array(numLayers);
+	const bytes = new Uint8Array(Math.min(4 * numLayers, ZEROS.length));
+	try {
+		for (let i = 0; i < numLayers; ) {
+			const chunk = bytes.subarray(
+				0,
+				Math.min(bytes.length, 4 * (numLayers - i)),
+			);
+			prng.getBytes(chunk);
+			for (let offset = 0; offset < chunk.length; offset += 4) {
+				seq[i++] = chunk[offset]!;
+			}
+		}
+	} finally {
+		bytes.fill(0);
+	}
+	return seq;
+}
+
+/**
  * Generate a sequence of S-box indices using PRF-derived key material.
  * Indices are in [0, poolSize).
  */
@@ -121,15 +151,18 @@ export function generateSequence(
 ): Uint32Array {
 	const { key, iv } = splitKeyMaterial(keyMaterial, true);
 	const prng = new PrngState(key, iv);
-
-	const seq = new Uint32Array(numLayers);
-	for (let i = 0; i < numLayers; i++) {
-		seq[i] = prng.uniform(poolSize);
-	}
-
-	prng.cleanup();
 	key.fill(0);
 	iv.fill(0);
 
-	return seq;
+	try {
+		if (poolSize === 256) return highByteSequence(numLayers, prng);
+
+		const seq = new Uint32Array(numLayers);
+		for (let i = 0; i < numLayers; i++) {
+			seq[i] = prng.uniform(poolSize);
+		}
+		return seq;
+	} finally {
+		prng.cleanup();
+	}
 }

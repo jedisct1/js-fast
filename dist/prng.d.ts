@@ -1,16 +1,17 @@
 /**
- * Deterministic PRNG state using AES-128 ECB encryption of an incrementing counter.
+ * Deterministic PRNG: AES-128 encryption of an incrementing counter.
  * Matches the C and Zig reference implementations exactly.
+ *
+ * They increment the counter before each block, so the stream is AES-128-CTR
+ * starting from `nonce + 1`.
  */
 export declare class PrngState {
-    private readonly key;
-    private readonly counter;
-    private readonly buffer;
+    private ctr;
+    private buffer;
     private bufferPos;
     constructor(key: Uint8Array, nonce: Uint8Array);
-    private incrementCounter;
-    private encryptBlock;
     getBytes(output: Uint8Array): void;
+    private refill;
     nextU32(): number;
     /**
      * Generate a uniform random number in [0, bound) with no modulo bias.

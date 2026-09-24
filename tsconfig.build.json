@@ -5,6 +5,7 @@
 		"emitDeclarationOnly": true,
 		"declaration": true,
 		"declarationMap": false,
+		"stripInternal": true,
 		"outDir": "dist",
 		"rootDir": "src",
 		"types": ["node"]

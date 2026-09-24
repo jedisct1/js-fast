@@ -6,3 +6,5 @@ export declare const ALPHANUMERIC_LOWER: Alphabet;
 export declare const ALPHANUMERIC: Alphabet;
 export declare const BASE64: Alphabet;
 export declare const BASE64URL: Alphabet;
+/** The fixed alphabet of wrapped tokens; see `encryptWrapped()`. */
+export declare const TOKEN67: Alphabet;

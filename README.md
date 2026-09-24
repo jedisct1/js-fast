@@ -4,6 +4,7 @@ A TypeScript implementation of the FAST (Format-preserving, Additive, Symmetric 
 
 FAST is a format-preserving encryption (FPE) scheme for arbitrary radix values and fixed word lengths.
 Because it preserves the input length and allowed symbols, it can encrypt structured values such as decimal identifiers or byte-oriented records.
+
 This package interoperates with other FAST implementations.
 
 ## Installation
@@ -264,9 +265,163 @@ enc.register({
 });
 ```
 
-The exported alphabets are `ALPHANUMERIC`, `ALPHANUMERIC_LOWER`, `ALPHANUMERIC_UPPER`, `BASE64`, `BASE64URL`, `DIGITS`, and `HEX_LOWER`.
+The exported alphabets are `ALPHANUMERIC`, `ALPHANUMERIC_LOWER`, `ALPHANUMERIC_UPPER`, `BASE64`, `BASE64URL`, `DIGITS`, `HEX_LOWER`, and `TOKEN67`, the alphabet of wrapped tokens.
 Custom alphabets used for encryption must have an integer radix from 4 to 256.
 An unsupported radix raises `TokenError` with a message identifying the pattern's alphabet configuration.
+
+## Wrapped Tokens
+
+Format-preserving output is convenient, but recovering it means finding the tokens again, which can fail as described in [Decrypting Recorded Tokens](#decrypting-recorded-tokens).
+`encryptWrapped()` gives up the original format instead.
+It replaces every detected token with a self-delimiting `{ENCRYPTED:<payload>}` wrapper, and `decryptWrapped()` finds those wrappers again without stored positions, pattern names, or the pattern registry.
+
+```ts
+const enc = new TokenEncryptor(key);
+
+const wrapped = enc.encryptWrapped(
+  "Deploy with ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij today",
+);
+// "Deploy with {ENCRYPTED:<48 symbols>} today"
+
+const restored = new TokenEncryptor(key).decryptWrapped(wrapped);
+```
+
+The whole token is encrypted, including its prefix and separators, so the wrapper does not reveal the provider.
+Its payload is eight symbols longer than the token, and the complete wrapper is exactly 20 characters longer.
+Text outside tokens, Unicode included, is copied unchanged.
+A fresh instance, a different set of registered patterns, or another document can decrypt a wrapper as long as the key and tweak are the same.
+
+Detection is the same as for `encrypt()`, including the `types` filter, so the scanner's false positives and misses still apply.
+Wrapping only makes recovery reliable.
+
+### Options and limits
+
+`encryptWrapped(text, options?)` accepts `types`, `tweak`, and `maxTokenLength`.
+`decryptWrapped(text, options?)` accepts `tweak`, `maxTokenLength`, and `onInvalid`; it has no `types` option because it does not look for tokens.
+
+`maxTokenLength` bounds the work done for a single wrapper.
+It defaults to 512 characters and must be an integer from 2 to 4,096, so a payload never exceeds 4,104 symbols.
+Several built-in patterns, such as OpenAI and Stripe keys, have no maximum length, and a longer match makes encryption throw rather than stay in plaintext.
+If you raise the limit for encryption, raise it for decryption as well.
+
+On an Apple M5 Max, the first wrapped call on an instance spends about 3.5 ms deriving its key and S-box pool.
+Each wrapper then takes about 1 ms to encrypt or decrypt at 512 characters, 12 ms at 2,048, and 56 ms at 4,096.
+The limit bounds the cost of one wrapper, not of a whole document, so services that decrypt untrusted text should also limit document size and request rates.
+
+### Strict and preserve decryption
+
+By default, `decryptWrapped()` returns a string only if every candidate is valid, and otherwise throws without returning partial output.
+A candidate is the text after each `{ENCRYPTED:` opener: the longest run of alphabet symbols, which must be followed by `}` and hold between 10 and `maxTokenLength + 8` symbols.
+Framing is checked for the whole text before anything is decrypted.
+
+- `WrappedTokenFormatError` reports a candidate with a symbol outside the alphabet, no closing brace, or a bad payload length.
+  A payload that only exceeds `maxTokenLength` has its own message, so a configuration mismatch does not look like corruption.
+- `WrappedTokenIntegrityError` reports a wrapper whose check symbols do not decrypt to zero.
+  A wrong key, a wrong tweak, or a modified payload normally ends here.
+
+Both extend `TokenError`, and their messages never include tokens, payloads, tweaks, keys, or pattern names.
+
+With `{ onInvalid: "preserve" }`, the method returns `{ text, preservedCandidates }` instead.
+Valid wrappers are decrypted, and each invalid candidate is left unchanged and counted once.
+A candidate ends at the first symbol outside the alphabet, which is consumed only when it is `}`, so a stray or quoted opener does not hide the wrappers after it.
+
+```ts
+const result = enc.decryptWrapped(`say "{ENCRYPTED:" then ${wrapped}`, {
+  onInvalid: "preserve",
+});
+// result.text: 'say "{ENCRYPTED:" then Deploy with ghp_... today'
+// result.preservedCandidates: 1
+```
+
+Nested wrappers are checked independently: in `{ENCRYPTED:{ENCRYPTED:...}}` the outer opener is kept, and the inner wrapper is decrypted only if it passes its own check.
+Recovered tokens are never scanned again.
+Invalid options, a destroyed instance, and other operational errors still throw in preserve mode.
+
+The TypeScript overloads return `string` in the default mode, `WrappedDecryptResult` for `onInvalid: "preserve"`, and the union when the mode is only known at run time.
+
+### Using wrapped tokens in a pipeline
+
+Encrypt only newly received plaintext, and store the wrapped result.
+`encryptWrapped()` rejects any text that already contains `{ENCRYPTED:`, whether or not it is a valid wrapper, because a literal wrapper cannot be told apart from a real one.
+Running it again over a history that contains wrappers therefore throws, instead of nesting or skipping them.
+
+Use strict decryption when validating stored text or wherever integrity matters.
+Preserve mode suits display of partial streamed or pasted text, where `preservedCandidates` tells you that something could not be recovered.
+The count does not say where, and a successful result can mix recovered tokens with text that was never verified.
+
+### Integrity and privacy limits
+
+Eight zero symbols are appended to each token before encryption and checked after decryption, before any plaintext is released.
+Assuming FAST behaves as a strong tweakable pseudorandom permutation over the whole word, a forged or damaged wrapper passes with probability about 67^-8, or 2.5e-15, roughly 48.5 bits.
+This is a conditional, per-attempt bound that accumulates over attempts.
+It is not standard authenticated encryption and does not provide 128-bit integrity.
+
+Encryption is deterministic.
+Equal tokens produce equal wrappers under the same key and tweak, and the wrapper reveals the token length.
+The check symbols do not add entropy, so short custom tokens can be enumerated by anyone who can encrypt.
+A valid wrapper can be replayed, moved, or swapped for another under the same key and tweak, and removing a whole wrapper cannot be detected.
+Nothing here authenticates the surrounding text, the order of wrappers, or the completeness of a document; use an authenticated container when you need that.
+
+A tweak, such as a tenant or conversation identifier, keeps wrappers from being reused across contexts.
+Keep it yourself: it is not stored in the wrapper.
+An omitted tweak and an empty one are the same.
+
+### Wrapped format, version 1
+
+This section defines the format for other implementations.
+The shared test vectors in [`test/fixtures/wrapped-tokens-v1.json`](test/fixtures/wrapped-tokens-v1.json) cover the derived key and tweak, parameters, payloads, invalid wrappers, and whole documents.
+Check them before treating another implementation as compatible.
+
+The alphabet has 67 symbols, in this order:
+
+```text
+0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/-_.
+```
+
+A wrapper is the literal `{ENCRYPTED:`, a payload, and `}`, with no padding, whitespace, escaping, or separator.
+To encrypt a token of length `L`, map each character to its alphabet index, append eight zero indices, and encrypt the resulting word of length `n = L + 8` with radix-67 FAST.
+The payload is the ciphertext written with the same alphabet.
+To decrypt, invert the whole word, check that the last eight indices are zero, and only then strip them.
+
+The FAST key and tweak are derived from the 16-byte master key with the package's existing AES-CMAC derivation and part encoding:
+
+```text
+wrapperKey   = deriveKey(masterKey, encodeParts(["fast-cipher/tokens/wrapped/v1/key"]), 16)
+wrapperTweak = encodeParts(["fast-cipher/tokens/wrapped/v1/tweak", callerTweak or empty])
+```
+
+`encodeParts` writes a four-byte big-endian part count, then each part's four-byte big-endian length and bytes.
+`deriveKey` concatenates AES-CMAC outputs over `counter_be32 || input`, starting at counter zero.
+FAST then derives its S-box pool and sequence from `wrapperKey` exactly as `FastCipher` does.
+
+The parameters are frozen for version 1, independent of later changes to `calculateRecommendedParams()`.
+Radix is 67, the S-box count 256, and the security level 128.
+The round counts come from these two rows of the FAST round table:
+
+| Word length | 2   | 3   | 4   | 5   | 6   | 7   | 8   | 9   | 10  | 12  | 16  | 32  | 50  | 64  | 100 |
+| ----------- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Radix 16    | 67  | 55  | 48  | 43  | 39  | 36  | 35  | 34  | 34  | 33  | 33  | 35  | 38  | 41  | 47  |
+| Radix 100   | 40  | 33  | 28  | 27  | 26  | 26  | 25  | 25  | 25  | 26  | 26  | 30  | 34  | 37  | 44  |
+
+For each row, interpolate linearly between the surrounding word lengths with `y0 + ((n - x0) / (x1 - x0)) * (y1 - y0)`.
+At 100 or more, use the last entry multiplied by `sqrt(n / 100)`.
+With those values `r16` and `r100`, compute in double precision:
+
+```text
+f           = (ln(67) - ln(16)) / (ln(100) - ln(16))
+rawRounds   = r16 + f * (r100 - r16)
+numLayers   = ceil(max(1, rawRounds)) * n
+branchDist1 = n <= 2 ? 0 : min(ceil(sqrt(n)), n - 2)
+branchDist2 = min(branchDist1 > 1 ? branchDist1 - 1 : 1, n - branchDist1 - 1)
+```
+
+For every supported word length, from 10 to 4,104, the raw round count is at least 2e-4 away from an integer.
+Floating-point differences between platforms therefore cannot change `numLayers`.
+
+A decoder looks for each exact `{ENCRYPTED:` opener and reads the longest run of alphabet symbols after it.
+The candidate is well framed only if that run is followed by `}` and its length is from 10 to `maxTokenLength + 8`.
+The next search starts right after the candidate: after the `}` if there is one, or at the character that ended the run otherwise.
+An incompatible future format must use a different opener.
 
 ## Development
 

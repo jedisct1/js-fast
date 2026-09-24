@@ -8,9 +8,15 @@ import {
 	BASE64URL,
 	DIGITS,
 	HEX_LOWER,
+	TOKEN67,
 } from "./alphabets.ts";
 import { cycleWalk } from "./cyclewalk.ts";
-import { TokenError, TokenFormatError, UnknownPatternError } from "./errors.ts";
+import {
+	TokenError,
+	TokenFormatError,
+	UnknownPatternError,
+	WrappedTokenFormatError,
+} from "./errors.ts";
 import { BUILTIN_PATTERNS, MIN_SEGMENT_LENGTH } from "./registry.ts";
 import { scan } from "./scanner.ts";
 import { transformBody } from "./transformer.ts";
@@ -27,6 +33,16 @@ import {
 	segmentClass,
 	tokenBody,
 } from "./validate.ts";
+import {
+	assertWrappable,
+	isPreserveMode,
+	resolveMaxTokenLength,
+	unwrapText,
+	WRAPPED_OPENER,
+	type WrappedDecryptResult,
+	WrappedTokenCipher,
+	wrapperTweak,
+} from "./wrapped.ts";
 
 export type { CycleWalkResult } from "./cyclewalk.ts";
 export { cycleWalk, MAX_CYCLE_STEPS } from "./cyclewalk.ts";
@@ -35,6 +51,8 @@ export {
 	TokenError,
 	TokenFormatError,
 	UnknownPatternError,
+	WrappedTokenFormatError,
+	WrappedTokenIntegrityError,
 } from "./errors.ts";
 export { BUILTIN_PATTERNS, MIN_SEGMENT_LENGTH } from "./registry.ts";
 export { scan } from "./scanner.ts";
@@ -46,6 +64,7 @@ export type {
 	TokenPattern,
 	TokenSpan,
 } from "./types.ts";
+export type { WrappedDecryptResult } from "./wrapped.ts";
 export {
 	ALPHANUMERIC,
 	ALPHANUMERIC_LOWER,
@@ -54,6 +73,7 @@ export {
 	BASE64URL,
 	DIGITS,
 	HEX_LOWER,
+	TOKEN67,
 };
 
 export interface TokenEncryptorOptions {
@@ -82,6 +102,28 @@ export interface EncryptResult {
 	spans: EncryptedSpan[];
 }
 
+export interface WrappedEncryptOptions {
+	/** Names of the patterns to detect; all registered patterns by default. */
+	types?: string[];
+	/** Pass the same tweak to `decryptWrapped()`. */
+	tweak?: Uint8Array;
+	/** Longest token to wrap, an integer from 2 to 4096; 512 by default. */
+	maxTokenLength?: number;
+}
+
+export interface WrappedDecryptOptions {
+	/** The tweak given to `encryptWrapped()`. */
+	tweak?: Uint8Array;
+	/** Longest token to accept, an integer from 2 to 4096; 512 by default. */
+	maxTokenLength?: number;
+	/**
+	 * `"throw"`, the default, rejects the whole text if any candidate is
+	 * invalid.
+	 * `"preserve"` leaves invalid candidates unchanged and counts them.
+	 */
+	onInvalid?: "throw" | "preserve";
+}
+
 type Mode = "encrypt" | "decrypt";
 
 interface MarkerHit {
@@ -98,6 +140,7 @@ export class TokenEncryptor {
 	private readonly key: Uint8Array;
 	private readonly cache = new Map<string, FastCipher>();
 	private readonly patterns: TokenPattern[];
+	private wrapped: WrappedTokenCipher | null = null;
 	private destroyed = false;
 
 	constructor(key: Uint8Array) {
@@ -127,6 +170,7 @@ export class TokenEncryptor {
 		if (wordLength < 2) {
 			throw new TokenFormatError(pattern.name);
 		}
+		this.assertAlive();
 		const k = `${radix}:${wordLength}`;
 		let cipher = this.cache.get(k);
 		if (!cipher) {
@@ -416,6 +460,103 @@ export class TokenEncryptor {
 		return hits;
 	}
 
+	/**
+	 * Replace every detected token with `{ENCRYPTED:<payload>}`.
+	 *
+	 * Each complete token, prefix and separators included, is encrypted with
+	 * eight check symbols, so the replacement is 20 characters longer.
+	 * `decryptWrapped()` recovers the text without the pattern registry.
+	 * Encrypt only new plaintext: text that already contains `{ENCRYPTED:`
+	 * is rejected.
+	 *
+	 * @throws WrappedTokenFormatError if the text contains `{ENCRYPTED:`, or
+	 * a detected token is too short, longer than `maxTokenLength`, or uses a
+	 * symbol outside `TOKEN67`.
+	 */
+	encryptWrapped(text: string, options?: WrappedEncryptOptions): string {
+		this.assertAlive();
+		const maxTokenLength = resolveMaxTokenLength(options?.maxTokenLength);
+		if (options?.types !== undefined && !Array.isArray(options.types)) {
+			throw new TypeError("types must be an array of pattern names");
+		}
+		const tweak = wrapperTweak(options?.tweak);
+		try {
+			if (text.includes(WRAPPED_OPENER)) {
+				throw new WrappedTokenFormatError(
+					"Text already contains an encrypted token opener",
+				);
+			}
+
+			const spans = scan(text, this.activePatterns(options), this.patterns);
+			for (const span of spans) {
+				assertWrappable(text.slice(span.start, span.end), maxTokenLength);
+			}
+
+			const parts: string[] = [];
+			let cursor = 0;
+			for (const span of spans) {
+				const token = text.slice(span.start, span.end);
+				parts.push(
+					text.slice(cursor, span.start),
+					this.wrappedCipher().wrap(token, tweak),
+				);
+				cursor = span.end;
+			}
+			parts.push(text.slice(cursor));
+			return parts.join("");
+		} finally {
+			tweak.fill(0);
+		}
+	}
+
+	/**
+	 * Replace every `{ENCRYPTED:<payload>}` wrapper with its token.
+	 *
+	 * Only wrappers are recognized, so registered patterns do not matter.
+	 * Each wrapper must decrypt with its check symbols intact.
+	 * In the default `"throw"` mode, any invalid candidate throws and no text
+	 * is returned.
+	 *
+	 * @throws WrappedTokenFormatError for a candidate without a closing brace,
+	 * with a symbol outside `TOKEN67`, or with a bad payload length.
+	 * @throws WrappedTokenIntegrityError for a wrapper that fails its check.
+	 */
+	decryptWrapped(
+		text: string,
+		options: WrappedDecryptOptions & { onInvalid: "preserve" },
+	): WrappedDecryptResult;
+	decryptWrapped(
+		text: string,
+		options?: WrappedDecryptOptions & { onInvalid?: "throw" },
+	): string;
+	decryptWrapped(
+		text: string,
+		options?: WrappedDecryptOptions,
+	): string | WrappedDecryptResult;
+	decryptWrapped(
+		text: string,
+		options?: WrappedDecryptOptions,
+	): string | WrappedDecryptResult {
+		this.assertAlive();
+		const maxTokenLength = resolveMaxTokenLength(options?.maxTokenLength);
+		const preserve = isPreserveMode(options?.onInvalid);
+		const tweak = wrapperTweak(options?.tweak);
+		try {
+			const result = unwrapText(text, maxTokenLength, preserve, (payload) =>
+				this.wrappedCipher().unwrap(payload, tweak),
+			);
+			return preserve ? result : result.text;
+		} finally {
+			tweak.fill(0);
+		}
+	}
+
+	private wrappedCipher(): WrappedTokenCipher {
+		this.assertAlive();
+		this.wrapped ??= WrappedTokenCipher.create(this.key);
+		return this.wrapped;
+	}
+
 	register(pattern: TokenPattern): void {
 		this.assertAlive();
 		this.patterns.unshift(pattern);
@@ -426,5 +567,7 @@ export class TokenEncryptor {
 		this.key.fill(0);
 		for (const cipher of this.cache.values()) cipher.destroy();
 		this.cache.clear();
+		this.wrapped?.destroy();
+		this.wrapped = null;
 	}
 }

@@ -7,6 +7,7 @@ import {
 	type TokenPattern,
 } from "../src/tokens/index.ts";
 import { shannonEntropy } from "../src/tokens/scanner.ts";
+import { SAMPLE_TOKENS } from "./helpers.ts";
 
 const TEST_KEY = new Uint8Array([
 	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
@@ -17,41 +18,6 @@ const ALT_KEY = new Uint8Array([
 	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
 	0x1d, 0x1e, 0x1f,
 ]);
-
-// Realistic sample tokens for each provider
-const SAMPLE_TOKENS: Record<string, string> = {
-	"github-pat": "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
-	"github-oauth": "gho_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
-	"github-user": "ghu_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
-	"github-server": "ghs_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
-	"github-refresh": "ghr_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
-	gitlab: "glpat-ABCDEFGHIJKLMNOPQRST",
-	"aws-access-key": "AKIAIOSFODNN7EXAMPLE",
-	openai:
-		"sk-proj-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-ABCDEFGH",
-	"openai-legacy": "sk-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuv",
-	anthropic:
-		"sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-ABCDEFGHIJKLMNOPQRSTUVWXYZa",
-	"stripe-secret-live": "sk_live_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
-	"stripe-publish-live": "pk_live_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
-	"stripe-secret-test": "sk_test_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
-	"stripe-publish-test": "pk_test_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
-	"google-api": "AIzaSyA1234567890abcdefghijklmnopqrstuv",
-	twilio: "SK0123456789abcdef0123456789abcdef",
-	npm: "npm_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
-	pypi: "pypi-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01",
-	datadog: "ddapi_abcdefghijklmnopqrstuvwxyz0123456789abcd",
-	vercel: "vercel_ABCDEFGHIJKLMNOPQRSTUVWXYZab",
-	supabase: "sbp_0123456789abcdef0123456789abcdef01234567",
-	huggingface: "hf_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh",
-	grafana: "glc_ABCDEFGHIJKLMNOPQRSTUVWXYZabcd",
-	sendgrid:
-		"SG.ABCDEFGHIJKLMNOPQRSTUV.ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopq",
-	"slack-bot": "xoxb-123456789012-1234567890123-ABCDEFGHIJKLMNOPQRSTUVWXab",
-	"slack-user": "xoxp-123456789012-1234567890123-ABCDEFGHIJKLMNOPQRSTUVWXab",
-	fastly: "5lYCIuNxQuC-WFvIvHNmjO0PvaVqrtos",
-	"aws-secret-key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-};
 
 // Build regex patterns that tokens should match (to verify format is preserved)
 const FORMAT_REGEXES: Record<string, RegExp> = {

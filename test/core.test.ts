@@ -4,6 +4,7 @@ import { cdec, cenc } from "../src/core.ts";
 import { calculateRecommendedParams } from "../src/params.ts";
 import { generateSBoxPool } from "../src/sbox.ts";
 import type { FastParams } from "../src/types.ts";
+import { hex } from "./helpers.ts";
 
 describe("layer roundtrip", () => {
 	test("single ES/DS layer inverts correctly", () => {
@@ -146,6 +147,64 @@ describe("layer roundtrip", () => {
 		cdec(params, pool, seq, encrypted, decrypted);
 
 		expect(decrypted).toEqual(original);
+	});
+});
+
+describe("cross-implementation vectors", () => {
+	// go-fast vectors for radix 256.
+	// Its five-byte vector is left out because this package caps branchDist2
+	// for five-symbol words.
+	const goKey = hex("000102030405060708090a0b0c0d0e0f");
+	const goVectors = [
+		["0025", "", "0aa6"],
+		["00254a", "", "dc1e42"],
+		["00254a6f94b9de03", "", "54149f51b25fccdd"],
+		[
+			"00254a6f94b9de03284d7297bce1062b",
+			"",
+			"5dc4d5bbd00026b67ab3fa15f37a9e31",
+		],
+		[
+			"00254a6f94b9de03284d7297bce1062b50759abfe4092e53789dc2e70c31567b",
+			"",
+			"610933225fbfa5edf41e786213d5cf51a3687649a65dba7cfc60dbac013eb17f",
+		],
+		[
+			"00254a6f94b9de03284d7297bce1062b",
+			"746573742d747765616b",
+			"ab2350b978be45a2bfcec6481508b15c",
+		],
+	] as const;
+
+	for (const [plaintext, tweak, expected] of goVectors) {
+		test(`go-fast radix 256, ${plaintext.length / 2} bytes${tweak ? ", tweaked" : ""}`, () => {
+			const input = hex(plaintext);
+			const cipher = FastCipher.create(
+				calculateRecommendedParams(256, input.length),
+				goKey,
+			);
+			const ciphertext = cipher.encrypt(input, hex(tweak));
+			expect(ciphertext).toEqual(hex(expected));
+			expect(cipher.decrypt(ciphertext, hex(tweak))).toEqual(input);
+			cipher.destroy();
+		});
+	}
+
+	test("zig-fast radix 10, 16 digits", () => {
+		const cipher = FastCipher.create(
+			calculateRecommendedParams(10, 16),
+			hex("2b7e151628aed2a6abf7158809cf4f3c"),
+		);
+		const tweak = hex("0011223344556677");
+		const plaintext = new Uint8Array([
+			1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6,
+		]);
+		const ciphertext = cipher.encrypt(plaintext, tweak);
+		expect(ciphertext).toEqual(
+			new Uint8Array([4, 6, 7, 8, 2, 9, 3, 2, 5, 1, 2, 5, 6, 9, 8, 2]),
+		);
+		expect(cipher.decrypt(ciphertext, tweak)).toEqual(plaintext);
+		cipher.destroy();
 	});
 });
 
