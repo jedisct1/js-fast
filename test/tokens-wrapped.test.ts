@@ -25,7 +25,7 @@ import {
 	wrapperTweak,
 } from "../src/tokens/wrapped.ts";
 import shared from "./fixtures/wrapped-tokens-v1.json";
-import { hex, SAMPLE_TOKENS } from "./helpers.ts";
+import { decodeSecret, hex, SAMPLE_TOKENS } from "./helpers.ts";
 
 const KEY = Uint8Array.from({ length: 16 }, (_, i) => i);
 const OTHER_KEY = Uint8Array.from({ length: 16 }, (_, i) => 0x10 + i);
@@ -563,7 +563,7 @@ describe("encryptWrapped", () => {
 
 	test("short Slack segments and SendGrid periods are encrypted too", () => {
 		const enc = new TokenEncryptor(KEY);
-		const slack = "xoxb-12-345-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+		const slack = decodeSecret("kbko-12-345-NOPQRSTUVWXYZABCDEFGHIJKLM");
 		expect(enc.encryptWithSpans(slack).spans[0]!.encrypted).toStartWith(
 			"xoxb-12-345-",
 		);

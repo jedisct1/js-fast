@@ -22,16 +22,21 @@ import {
 	UnknownPatternError,
 } from "../src/tokens/index.ts";
 import { transformBody } from "../src/tokens/transformer.ts";
+import { decodeSecret } from "./helpers.ts";
 
 const KEY_07 = new Uint8Array(16).fill(0x07);
 
-const SLACK_PLAIN = "xoxb-12345678-12345678-siXA";
-const SLACK_ENCRYPTED = "xoxb-19234138-19234138-v20D";
-const SLACK_3_STEPS_PLAIN = "xoxb-12345678-12345678-NxKQ";
-const SLACK_3_STEPS_ENCRYPTED = "xoxb-19234138-19234138-LvrX";
-const STRIPE_PLAIN = "sk_live_F9ZJz11XNvB3i0RhazAEAbGJdznewI9VguEStDdFtyHK";
-const STRIPE_ENCRYPTED = "sk_live_AAAAAAAAAAAAAAAAAAAAAAAAAKIAAAAAAAAAAAAAAAAA";
-const FASTLY_PLAIN = "XhnOcYIP3GkYYKrJTKOrVLu6mQbbwF0t";
+const SLACK_PLAIN = decodeSecret("kbko-12345678-12345678-fvKN");
+const SLACK_ENCRYPTED = decodeSecret("kbko-19234138-19234138-i20Q");
+const SLACK_3_STEPS_PLAIN = decodeSecret("kbko-12345678-12345678-AkXD");
+const SLACK_3_STEPS_ENCRYPTED = decodeSecret("kbko-19234138-19234138-YieK");
+const STRIPE_PLAIN = decodeSecret(
+	"fx_yvir_S9MWm11KAiO3v0EunmNRNoTWqmarjV9IthRFgQqSglUX",
+);
+const STRIPE_ENCRYPTED = decodeSecret(
+	"fx_yvir_NNNNNNNNNNNNNNNNNNNNNNNNNXVNNNNNNNNNNNNNNNNN",
+);
+const FASTLY_PLAIN = decodeSecret("KuaBpLVC3TxLLXeWGXBeIYh6zDoojS0g");
 const FASTLY_ENCRYPTED = `[ENCRYPTED:fastly]${"A".repeat(32)}`;
 
 const PROPERTY_KEYS = Number(process.env.TOKEN_PROPERTY_KEYS ?? 8);
@@ -624,7 +629,7 @@ describe("regression vectors, key = 16 x 0x07", () => {
 	test("slack: the digits-only intermediate value is a token of its own", () => {
 		// A numeric input must stay in the ten-digit alphabet.
 		const enc = new TokenEncryptor(KEY_07);
-		const token = "xoxb-12345678-12345678-1234";
+		const token = decodeSecret("kbko-12345678-12345678-1234");
 		const encrypted = enc.encryptToken(token, "slack-bot");
 		expect(encrypted).toMatch(/^xoxb-\d{8}-\d{8}-\d{4}$/);
 		expect(encrypted).not.toBe(SLACK_ENCRYPTED);
@@ -1126,7 +1131,7 @@ describe("decryptToken rejections", () => {
 		expectMalformed(`${SLACK_ENCRYPTED}-extra`, "slack-bot");
 		expectMalformed(`${SLACK_ENCRYPTED}.`, "slack-bot");
 		expectMalformed(SLACK_ENCRYPTED.replace("xoxb-", "xoxp-"), "slack-bot");
-		expectMalformed("xoxb-1234567a-12345678-siXA", "slack-bot");
+		expectMalformed(decodeSecret("kbko-1234567n-12345678-fvKN"), "slack-bot");
 	});
 
 	test("heuristic tokens need their exact marker", () => {

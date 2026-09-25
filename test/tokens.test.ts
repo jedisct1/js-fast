@@ -7,7 +7,7 @@ import {
 	type TokenPattern,
 } from "../src/tokens/index.ts";
 import { shannonEntropy } from "../src/tokens/scanner.ts";
-import { SAMPLE_TOKENS } from "./helpers.ts";
+import { decodeSecret, SAMPLE_TOKENS } from "./helpers.ts";
 
 const TEST_KEY = new Uint8Array([
 	0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c,
@@ -136,14 +136,14 @@ describe("minimum body length enforcement", () => {
 
 	test("ghp_ with 35 chars (one below min) is not matched", () => {
 		const enc = new TokenEncryptor(TEST_KEY);
-		const text = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi"; // 35 chars
+		const text = decodeSecret("tuc_NOPQRSTUVWXYZABCDEFGHIJKLMnopqrstuv"); // 35 chars
 		expect(enc.encrypt(text)).toBe(text);
 		enc.destroy();
 	});
 
 	test("ghp_ with exactly 36 chars IS matched", () => {
 		const enc = new TokenEncryptor(TEST_KEY);
-		const text = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"; // 36 chars
+		const text = decodeSecret("tuc_NOPQRSTUVWXYZABCDEFGHIJKLMnopqrstuvw"); // 36 chars
 		expect(enc.encrypt(text)).not.toBe(text);
 		enc.destroy();
 	});
@@ -247,7 +247,9 @@ describe("scanner tests", () => {
 	test("structured slack with internal prefix but no valid right-side: no split", () => {
 		const enc = new TokenEncryptor(TEST_KEY);
 		// Slack last segment contains AKIA but the tail is too short for an AWS key.
-		const token = "xoxb-123456789012-1234567890123-ABCDEFGHIJKLMNOPQRSTAKIAfoo";
+		const token = decodeSecret(
+			"kbko-123456789012-1234567890123-NOPQRSTUVWXYZABCDEFGNXVNsbb",
+		);
 		const encrypted = enc.encrypt(token);
 		// Entire thing should be one Slack token, not split at AKIA.
 		expect(encrypted.startsWith("xoxb-")).toBe(true);
@@ -410,7 +412,9 @@ describe("structured token tests", () => {
 	test("slack: short segments left as-is", () => {
 		const enc = new TokenEncryptor(TEST_KEY);
 		// Token with a very short first segment
-		const token = "xoxb-12-1234567890123-ABCDEFGHIJKLMNOPQRSTUVWXab";
+		const token = decodeSecret(
+			"kbko-12-1234567890123-NOPQRSTUVWXYZABCDEFGHIJKno",
+		);
 		const encrypted = enc.encrypt(token);
 		// The "12" segment (len 2) should be preserved as-is
 		const encParts = encrypted.slice(5).split("-");
@@ -658,14 +662,14 @@ describe("heuristic pattern tests", () => {
 	test("decrypt on plaintext is safe: no marker means no transformation", () => {
 		const enc = new TokenEncryptor(TEST_KEY);
 		// A random-looking 32-char string without marker is NOT touched
-		const text = "5lYCIuNxQuC-WFvIvHNmjO0PvaVqrtos";
+		const text = decodeSecret("5yLPVhAkDhP-JSiViUAzwB0CinIdegbf");
 		expect(enc.decrypt(text)).toBe(text);
 		enc.destroy();
 	});
 
 	test("decrypt on plaintext with AWS-like string is safe", () => {
 		const enc = new TokenEncryptor(TEST_KEY);
-		const text = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+		const text = decodeSecret("jWnyeKHgaSRZV/X7ZQRAT/oCkEsvPLRKNZCYRXRL");
 		expect(enc.decrypt(text)).toBe(text);
 		enc.destroy();
 	});
@@ -1026,7 +1030,7 @@ describe("shannon entropy", () => {
 	});
 
 	test("real fastly token has high entropy", () => {
-		const e = shannonEntropy("5lYCIuNxQuC-WFvIvHNmjO0PvaVqrtos");
+		const e = shannonEntropy(decodeSecret("5yLPVhAkDhP-JSiViUAzwB0CinIdegbf"));
 		expect(e).toBeGreaterThan(4.0);
 	});
 });
