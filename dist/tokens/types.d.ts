@@ -24,6 +24,7 @@ export interface StructuredTokenPattern {
      * Return `null` when the body is invalid.
      * Calling `parse(format(segments))` must return the same segments and alphabets.
      * Each alphabet must depend only on its own segment.
+     * The scanner can call it several times on the same body, so it must always give the same answer.
      */
     parse(body: string): {
         segments: string[];

@@ -65,3 +65,35 @@ export const SAMPLE_TOKENS: Record<string, string> = {
 export function hex(value: string): Uint8Array {
 	return new Uint8Array(Buffer.from(value, "hex"));
 }
+
+const repeatTo = (unit: string, size: number): string =>
+	unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
+
+/** A made-up AWS access key, built at run time so secret scanners ignore it. */
+export const AWS_KEY = `AKIA${"B".repeat(16)}`;
+
+/**
+ * Texts packed with prefixes, which used to make the scanner quadratic or worse.
+ * Each function returns a text of the given length.
+ */
+export const ADVERSARIAL_TEXTS: Record<string, (size: number) => string> = {
+	AKIA: (n) => repeatTo("AKIA", n),
+	"AWS keys": (n) => repeatTo(AWS_KEY, n),
+	AIza: (n) => repeatTo("AIza", n),
+	"pypi-": (n) => repeatTo("pypi-", n),
+	glc_: (n) => repeatTo("glc_", n),
+	"glpat-": (n) => repeatTo("glpat-", n),
+	vercel_: (n) => repeatTo("vercel_", n),
+	"sk-proj-": (n) => repeatTo("sk-proj-", n),
+	"sk-ant-api03-": (n) => repeatTo("sk-ant-api03-", n),
+	"slack + AWS keys": (n) => `xoxb-1-1-${repeatTo(AWS_KEY, n - 9)}`,
+	"slack + whole AWS keys": (n) =>
+		`xoxb-1-1-${AWS_KEY.repeat(Math.floor((n - 9) / 20))}`.padEnd(n, " "),
+	"slack + Twilio keys": (n) =>
+		`xoxb-1-1-${repeatTo(`SK${"a".repeat(32)}`, n - 9)}`,
+	"slack + AIza": (n) => `xoxb-1-1-${repeatTo("AIza", n - 9)}`,
+	"slack user + glc_": (n) => `xoxp-1-1-1-${repeatTo("glc_", n - 11)}`,
+	"sendgrid + AIza": (n) => `SG.${repeatTo("AIza", n - 3)}`,
+	mixed: (n) =>
+		repeatTo("AKIAglc_AIzasbp_pypi-hf_SKnpm_vercel_sk-proj-xoxb-1-1-", n),
+};

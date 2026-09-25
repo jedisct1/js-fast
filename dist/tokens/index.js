@@ -910,17 +910,20 @@ function segmentClass(pattern, parsed, index) {
 }
 
 // src/tokens/scanner.ts
+var NO_POSITIONS = [];
+var NO_OFFSETS = new Int32Array(0);
 function findAllPositions(text, needle) {
-  const positions = [];
+  let positions;
   let idx = 0;
   while (idx <= text.length - needle.length) {
     const pos = text.indexOf(needle, idx);
     if (pos === -1)
       break;
+    positions ??= [];
     positions.push(pos);
     idx = pos + 1;
   }
-  return positions;
+  return positions ?? NO_POSITIONS;
 }
 var stickyRegexCache = new WeakMap;
 function getStickyRegex(pattern) {
@@ -931,82 +934,233 @@ function getStickyRegex(pattern) {
   }
   return re;
 }
-function wouldMatchAt(text, pos, prefixPositions, allPatterns) {
-  for (const pattern of allPatterns) {
-    if (pattern.kind === "heuristic")
-      continue;
-    if (!text.startsWith(pattern.prefix, pos))
-      continue;
-    if (pattern.kind === "simple") {
-      if (wouldMatchSimpleAt(text, pos, pattern, prefixPositions, allPatterns)) {
-        return true;
+var CHARACTER_CLASS_WITH_LENGTH = /^(\[(?:[^\\[\]]|\\.)+\])\{(\d{1,9})(?:(,)(\d{0,9}))?\}$/;
+var lengthBoundsCache = new WeakMap;
+function lengthBounds(pattern) {
+  const cached = lengthBoundsCache.get(pattern);
+  if (cached !== undefined)
+    return cached;
+  getBodyValidator(pattern);
+  let bounds = null;
+  const m = CHARACTER_CLASS_WITH_LENGTH.exec(pattern.bodyRegex);
+  if (m) {
+    const charClass = new RegExp(`^${m[1]}$`);
+    let coversAlphabet = true;
+    for (const ch of pattern.bodyAlphabet.charToIndex.keys()) {
+      if (!charClass.test(ch)) {
+        coversAlphabet = false;
+        break;
       }
-    } else {
-      if (wouldMatchStructuredAt(text, pos, pattern, prefixPositions, allPatterns)) {
-        return true;
+    }
+    if (coversAlphabet) {
+      const min = Number(m[2]);
+      let max = min;
+      if (m[3] !== undefined)
+        max = m[4] === "" ? Infinity : Number(m[4]);
+      bounds = { min: Math.max(min, pattern.minBodyLength), max };
+    }
+  }
+  lengthBoundsCache.set(pattern, bounds);
+  return bounds;
+}
+function lastIndexAtMost(values, from, limit) {
+  let lo = from;
+  let hi = values.length;
+  while (lo < hi) {
+    const mid = lo + hi >>> 1;
+    if (values[mid] <= limit)
+      lo = mid + 1;
+    else
+      hi = mid;
+  }
+  return lo - 1;
+}
+
+class RunEnds {
+  text;
+  alphabet;
+  start = -1;
+  end = -2;
+  constructor(text, alphabet) {
+    this.text = text;
+    this.alphabet = alphabet;
+  }
+  from(pos) {
+    if (pos >= this.start && pos <= this.end)
+      return this.end;
+    const { text, alphabet } = this;
+    let end = pos;
+    while (end < text.length && alphabet.charToIndex.has(text[end])) {
+      if (end === this.start) {
+        end = this.end;
+        break;
+      }
+      end++;
+    }
+    this.start = pos;
+    this.end = end;
+    return end;
+  }
+}
+function sortedUnique(positions) {
+  if (positions.length === 0)
+    return NO_OFFSETS;
+  const sorted = Int32Array.from(positions).sort();
+  let count = 0;
+  for (const pos of sorted) {
+    if (count === 0 || sorted[count - 1] !== pos)
+      sorted[count++] = pos;
+  }
+  return sorted.subarray(0, count);
+}
+
+class Boundaries {
+  text;
+  occurrences = new Map;
+  positions;
+  starts;
+  first;
+  constructor(text, allPatterns) {
+    this.text = text;
+    const found = [];
+    for (const { prefix } of allPatterns) {
+      if (prefix.length === 0 || this.occurrences.has(prefix))
+        continue;
+      const positions = findAllPositions(text, prefix);
+      this.occurrences.set(prefix, positions);
+      for (const pos of positions)
+        found.push(pos);
+    }
+    this.positions = sortedUnique(found);
+    if (this.positions.length === 0) {
+      this.starts = NO_OFFSETS;
+      this.first = 0;
+      return;
+    }
+    this.starts = new Int32Array(this.positions.length);
+    this.first = this.starts.length;
+    this.findStarts(allPatterns);
+  }
+  findStarts(allPatterns) {
+    const { text } = this;
+    const byFirstChar = new Map;
+    const unprefixed = [];
+    const runs = new Map;
+    for (const pattern of allPatterns) {
+      if (pattern.kind === "heuristic")
+        continue;
+      const { prefix } = pattern;
+      if (prefix.length === 0) {
+        unprefixed.push(pattern);
+        continue;
+      }
+      let group = byFirstChar.get(prefix[0]);
+      if (!group) {
+        group = [];
+        byFirstChar.set(prefix[0], group);
+      }
+      group.push(pattern);
+    }
+    for (let k = this.positions.length - 1;k >= 0; k--) {
+      const pos = this.positions[k];
+      const group = byFirstChar.get(text[pos]);
+      if (group !== undefined && this.tokenStartsAt(pos, group, runs) || this.tokenStartsAt(pos, unprefixed, runs)) {
+        this.starts[--this.first] = pos;
       }
     }
   }
-  return false;
-}
-function wouldMatchSimpleAt(text, pos, pattern, prefixPositions, allPatterns) {
-  const bodyStart = pos + pattern.prefix.length;
-  let bodyEnd = bodyStart;
-  while (bodyEnd < text.length) {
-    if (!pattern.bodyAlphabet.charToIndex.has(text[bodyEnd]))
-      break;
-    bodyEnd++;
-  }
-  if (bodyEnd - bodyStart < pattern.minBodyLength)
-    return false;
-  const bodyValidator = getBodyValidator(pattern);
-  const validate = (body) => body.length >= pattern.minBodyLength && bodyValidator.test(body);
-  const truncEnd = findTruncatedEnd(text, bodyStart, bodyEnd, prefixPositions, allPatterns, validate);
-  if (truncEnd !== -1)
-    return true;
-  return validate(text.slice(bodyStart, bodyEnd));
-}
-function wouldMatchStructuredAt(text, pos, pattern, prefixPositions, allPatterns) {
-  const regex = getStickyRegex(pattern);
-  regex.lastIndex = pos;
-  const match = regex.exec(text);
-  if (!match)
-    return false;
-  const matchEnd = pos + match[0].length;
-  const bodyStart = pos + pattern.prefix.length;
-  const truncEnd = findTruncatedEnd(text, bodyStart, matchEnd, prefixPositions, allPatterns, (body2) => pattern.parse(body2) !== null);
-  if (truncEnd !== -1)
-    return true;
-  const body = text.slice(bodyStart, matchEnd);
-  if (pattern.parse(body) !== null) {
-    if (matchEnd < text.length) {
-      const nextCh = text[matchEnd];
-      if (pattern.trailingAlphabet.charToIndex.has(nextCh)) {
-        if (!prefixPositions.has(matchEnd))
-          return false;
+  tokenStartsAt(pos, patterns, runs) {
+    for (const pattern of patterns) {
+      if (!this.text.startsWith(pattern.prefix, pos))
+        continue;
+      let end;
+      if (pattern.kind === "simple") {
+        let patternRuns = runs.get(pattern);
+        if (!patternRuns) {
+          patternRuns = new RunEnds(this.text, pattern.bodyAlphabet);
+          runs.set(pattern, patternRuns);
+        }
+        end = this.simpleEnd(pattern, pos, patternRuns);
+      } else {
+        end = this.structuredEndAt(pattern, pos);
       }
+      if (end !== -1)
+        return true;
     }
-    return true;
+    return false;
   }
-  return false;
+  occurrencesOf(prefix) {
+    return this.occurrences.get(prefix) ?? findAllPositions(this.text, prefix);
+  }
+  simpleEnd(pattern, pos, runs) {
+    const bodyStart = pos + pattern.prefix.length;
+    const bodyEnd = runs.from(bodyStart);
+    if (bodyEnd - bodyStart < pattern.minBodyLength)
+      return -1;
+    const bounds = lengthBounds(pattern);
+    if (bounds) {
+      const k = lastIndexAtMost(this.starts, this.first, Math.min(bodyEnd - 1, bodyStart + bounds.max));
+      if (k >= this.first && this.starts[k] >= bodyStart + Math.max(bounds.min, 1)) {
+        return this.starts[k];
+      }
+      const length = bodyEnd - bodyStart;
+      return length >= bounds.min && length <= bounds.max ? bodyEnd : -1;
+    }
+    const bodyValidator = getBodyValidator(pattern);
+    const validate = (body) => body.length >= pattern.minBodyLength && bodyValidator.test(body);
+    const split = this.split(bodyStart, bodyEnd, validate);
+    if (split !== -1)
+      return split;
+    return validate(this.text.slice(bodyStart, bodyEnd)) ? bodyEnd : -1;
+  }
+  structuredEnd(pattern, start, matchEnd) {
+    const { text } = this;
+    const bodyStart = start + pattern.prefix.length;
+    const validate = (body) => pattern.parse(body) !== null;
+    const split = this.split(bodyStart, matchEnd, validate);
+    if (split !== -1)
+      return split;
+    if (!validate(text.slice(bodyStart, matchEnd)))
+      return -1;
+    if (matchEnd < text.length && pattern.trailingAlphabet.charToIndex.has(text[matchEnd]) && !this.isPrefixPosition(matchEnd)) {
+      return -1;
+    }
+    return matchEnd;
+  }
+  structuredEndAt(pattern, pos) {
+    const regex = getStickyRegex(pattern);
+    regex.lastIndex = pos;
+    const match = regex.exec(this.text);
+    if (!match)
+      return -1;
+    return this.structuredEnd(pattern, pos, pos + match[0].length);
+  }
+  split(bodyStart, bodyEnd, validateLeft) {
+    const { starts, first } = this;
+    for (let k = lastIndexAtMost(starts, first, bodyEnd - 1);k >= first; k--) {
+      const splitPos = starts[k];
+      if (splitPos <= bodyStart)
+        break;
+      if (validateLeft(this.text.slice(bodyStart, splitPos)))
+        return splitPos;
+    }
+    return -1;
+  }
+  isPrefixPosition(pos) {
+    const k = lastIndexAtMost(this.positions, 0, pos);
+    return k >= 0 && this.positions[k] === pos;
+  }
 }
 function scan(text, patterns, allPatterns) {
-  const allPats = allPatterns ?? patterns;
-  const uniquePrefixes = new Set(allPats.map((p) => p.prefix).filter((p) => p.length > 0));
-  const prefixPositions = new Set;
-  for (const pfx of uniquePrefixes) {
-    for (const pos of findAllPositions(text, pfx)) {
-      prefixPositions.add(pos);
-    }
-  }
+  const boundaries = new Boundaries(text, allPatterns ?? patterns);
   const candidates = [];
   for (const pattern of patterns) {
     if (pattern.kind === "structured") {
-      scanStructured(text, pattern, prefixPositions, allPats, candidates);
+      scanStructured(text, pattern, boundaries, candidates);
     } else if (pattern.kind === "heuristic") {
       scanHeuristic(text, pattern, candidates);
     } else {
-      scanSimple(text, pattern, prefixPositions, allPats, candidates);
+      scanSimple(text, pattern, boundaries, candidates);
     }
   }
   candidates.sort((a, b) => {
@@ -1026,53 +1180,21 @@ function scan(text, patterns, allPatterns) {
   }
   return result;
 }
-function findTruncatedEnd(text, bodyStart, bodyEnd, prefixPositions, allPatterns, validateLeft) {
-  const prefixesInBody = [];
-  for (let i = bodyStart + 1;i < bodyEnd; i++) {
-    if (prefixPositions.has(i))
-      prefixesInBody.push(i);
-  }
-  if (prefixesInBody.length === 0)
-    return -1;
-  for (let j = prefixesInBody.length - 1;j >= 0; j--) {
-    const splitPos = prefixesInBody[j];
-    const leftBody = text.slice(bodyStart, splitPos);
-    if (!validateLeft(leftBody))
+function scanSimple(text, pattern, boundaries, candidates) {
+  lengthBounds(pattern);
+  const positions = boundaries.occurrencesOf(pattern.prefix);
+  if (positions.length === 0)
+    return;
+  const runs = new RunEnds(text, pattern.bodyAlphabet);
+  for (const pos of positions) {
+    const end = boundaries.simpleEnd(pattern, pos, runs);
+    if (end === -1)
       continue;
-    if (!wouldMatchAt(text, splitPos, prefixPositions, allPatterns))
-      continue;
-    return splitPos;
-  }
-  return -1;
-}
-function scanSimple(text, pattern, prefixPositions, allPatterns, candidates) {
-  const bodyValidator = getBodyValidator(pattern);
-  const validate = (body) => body.length >= pattern.minBodyLength && bodyValidator.test(body);
-  for (const pos of findAllPositions(text, pattern.prefix)) {
-    const bodyStart = pos + pattern.prefix.length;
-    let bodyEnd = bodyStart;
-    while (bodyEnd < text.length) {
-      if (!pattern.bodyAlphabet.charToIndex.has(text[bodyEnd]))
-        break;
-      bodyEnd++;
-    }
-    if (bodyEnd - bodyStart < pattern.minBodyLength)
-      continue;
-    const truncEnd = findTruncatedEnd(text, bodyStart, bodyEnd, prefixPositions, allPatterns, validate);
-    let finalEnd;
-    if (truncEnd !== -1) {
-      finalEnd = truncEnd;
-    } else {
-      const fullBody = text.slice(bodyStart, bodyEnd);
-      if (!validate(fullBody))
-        continue;
-      finalEnd = bodyEnd;
-    }
     candidates.push({
       start: pos,
-      end: finalEnd,
+      end,
       pattern,
-      body: text.slice(bodyStart, finalEnd)
+      body: text.slice(pos + pattern.prefix.length, end)
     });
   }
 }
@@ -1151,41 +1273,22 @@ function scanHeuristic(text, pattern, candidates) {
     i = end;
   }
 }
-function scanStructured(text, pattern, prefixPositions, allPatterns, candidates) {
+function scanStructured(text, pattern, boundaries, candidates) {
   const regex = new RegExp(pattern.fullRegex, "g");
   for (let match = regex.exec(text);match !== null; match = regex.exec(text)) {
-    const matchStart = match.index;
+    const start = match.index;
     if (match[0].length === 0) {
-      regex.lastIndex = matchStart + 1;
+      regex.lastIndex = start + 1;
       continue;
     }
-    const matchEnd = matchStart + match[0].length;
-    const bodyStart = matchStart + pattern.prefix.length;
-    const truncEnd = findTruncatedEnd(text, bodyStart, matchEnd, prefixPositions, allPatterns, (body2) => pattern.parse(body2) !== null);
-    if (truncEnd !== -1) {
-      candidates.push({
-        start: matchStart,
-        end: truncEnd,
-        pattern,
-        body: text.slice(bodyStart, truncEnd)
-      });
+    const end = boundaries.structuredEnd(pattern, start, start + match[0].length);
+    if (end === -1)
       continue;
-    }
-    const body = text.slice(bodyStart, matchEnd);
-    if (pattern.parse(body) === null)
-      continue;
-    if (matchEnd < text.length) {
-      const nextCh = text[matchEnd];
-      if (pattern.trailingAlphabet.charToIndex.has(nextCh)) {
-        if (!prefixPositions.has(matchEnd))
-          continue;
-      }
-    }
     candidates.push({
-      start: matchStart,
-      end: matchEnd,
+      start,
+      end,
       pattern,
-      body
+      body: text.slice(start + pattern.prefix.length, end)
     });
   }
 }

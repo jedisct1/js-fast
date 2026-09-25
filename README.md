@@ -317,6 +317,19 @@ The package exports these alphabets for custom patterns:
 A custom alphabet must have an integer radix from 4 to 256.
 If it does not, encryption throws `TokenError` with a message that identifies the pattern's alphabet settings.
 
+A token's body runs until the first character that is not in `bodyAlphabet`.
+If another token starts inside that run, the body can end there instead, provided that what comes before is still a valid body.
+
+With the built-in patterns, scanning time grows roughly in proportion to the length of the text, even when the text is packed with prefixes.
+A custom pattern keeps that property when its `bodyRegex` is a single character class followed by a length, such as `[A-Za-z0-9]{32}` or `[A-Za-z0-9_-]{20,}`, and the class accepts every character of `bodyAlphabet`.
+Any other regex still works, but the scanner has to run it on each possible body, from the start of the body.
+A long run of body characters with many other tokens inside, or many copies of the pattern's prefix, can then make scanning much slower.
+The same goes for a structured pattern whose `parse()` reads the whole body.
+
+The scanner remembers what it learns from a pattern the first time it uses it.
+Once a pattern has been used, do not change it or its alphabet; register a new pattern object instead.
+A structured pattern's `parse()` can also be called several times on the same body, so it must always return the same answer.
+
 ## Wrapped Tokens
 
 Keeping the original token format is useful, but decryption has to find the tokens again.
