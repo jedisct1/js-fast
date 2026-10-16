@@ -6,7 +6,7 @@ import type {
 	TokenPattern,
 	TokenSpan,
 } from "./types.ts";
-import { getBodyValidator } from "./validate.ts";
+import { getBodyValidator, lengthBounds } from "./validate.ts";
 
 const NO_POSITIONS: readonly number[] = [];
 const NO_OFFSETS = new Int32Array(0);
@@ -32,52 +32,6 @@ function getStickyRegex(pattern: StructuredTokenPattern): RegExp {
 		stickyRegexCache.set(pattern, re);
 	}
 	return re;
-}
-
-interface LengthBounds {
-	readonly min: number;
-	readonly max: number;
-}
-
-const CHARACTER_CLASS_WITH_LENGTH =
-	/^(\[(?:[^\\[\]]|\\.)+\])\{(\d{1,9})(?:(,)(\d{0,9}))?\}$/;
-const lengthBoundsCache = new WeakMap<
-	SimpleTokenPattern,
-	LengthBounds | null
->();
-
-/**
- * Return the body length bounds when they are all that `bodyRegex` checks.
- *
- * That is the case for one character class followed by `{n}`, `{n,}` or `{n,m}`, when the class accepts every character of the body alphabet.
- * Bodies never extend past a run of alphabet characters, so the regex then accepts a body exactly when its length is within bounds.
- * Any other regex returns `null` and keeps being tested on each candidate body.
- */
-function lengthBounds(pattern: SimpleTokenPattern): LengthBounds | null {
-	const cached = lengthBoundsCache.get(pattern);
-	if (cached !== undefined) return cached;
-
-	getBodyValidator(pattern);
-	let bounds: LengthBounds | null = null;
-	const m = CHARACTER_CLASS_WITH_LENGTH.exec(pattern.bodyRegex);
-	if (m) {
-		const charClass = new RegExp(`^${m[1]}$`);
-		let coversAlphabet = true;
-		for (const ch of pattern.bodyAlphabet.charToIndex.keys()) {
-			if (!charClass.test(ch)) {
-				coversAlphabet = false;
-				break;
-			}
-		}
-		if (coversAlphabet) {
-			const min = Number(m[2]);
-			let max = min;
-			if (m[3] !== undefined) max = m[4] === "" ? Infinity : Number(m[4]);
-			bounds = { min: Math.max(min, pattern.minBodyLength), max };
-		}
-	}
-	lengthBoundsCache.set(pattern, bounds);
-	return bounds;
 }
 
 /** Index of the last value at most `limit` in `values[from..]`, or `from - 1`. */

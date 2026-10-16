@@ -828,6 +828,35 @@ function getBodyValidator(pattern) {
   }
   return re;
 }
+var CHARACTER_CLASS_WITH_LENGTH = /^(\[(?:[^\\[\]]|\\.)+\])\{(\d{1,9})(?:(,)(\d{0,9}))?\}$/;
+var lengthBoundsCache = new WeakMap;
+function lengthBounds(pattern) {
+  const cached = lengthBoundsCache.get(pattern);
+  if (cached !== undefined)
+    return cached;
+  getBodyValidator(pattern);
+  let bounds = null;
+  const m = CHARACTER_CLASS_WITH_LENGTH.exec(pattern.bodyRegex);
+  if (m) {
+    const charClass = new RegExp(`^${m[1]}$`);
+    let coversAlphabet = true;
+    for (const ch of pattern.bodyAlphabet.charToIndex.keys()) {
+      if (!charClass.test(ch)) {
+        coversAlphabet = false;
+        break;
+      }
+    }
+    if (coversAlphabet) {
+      const min = Number(m[2]);
+      let max = min;
+      if (m[3] !== undefined)
+        max = m[4] === "" ? Infinity : Number(m[4]);
+      bounds = { min: Math.max(min, pattern.minBodyLength), max };
+    }
+  }
+  lengthBoundsCache.set(pattern, bounds);
+  return bounds;
+}
 var fullValidatorCache = new WeakMap;
 function getFullValidator(pattern) {
   let re = fullValidatorCache.get(pattern);
@@ -933,35 +962,6 @@ function getStickyRegex(pattern) {
     stickyRegexCache.set(pattern, re);
   }
   return re;
-}
-var CHARACTER_CLASS_WITH_LENGTH = /^(\[(?:[^\\[\]]|\\.)+\])\{(\d{1,9})(?:(,)(\d{0,9}))?\}$/;
-var lengthBoundsCache = new WeakMap;
-function lengthBounds(pattern) {
-  const cached = lengthBoundsCache.get(pattern);
-  if (cached !== undefined)
-    return cached;
-  getBodyValidator(pattern);
-  let bounds = null;
-  const m = CHARACTER_CLASS_WITH_LENGTH.exec(pattern.bodyRegex);
-  if (m) {
-    const charClass = new RegExp(`^${m[1]}$`);
-    let coversAlphabet = true;
-    for (const ch of pattern.bodyAlphabet.charToIndex.keys()) {
-      if (!charClass.test(ch)) {
-        coversAlphabet = false;
-        break;
-      }
-    }
-    if (coversAlphabet) {
-      const min = Number(m[2]);
-      let max = min;
-      if (m[3] !== undefined)
-        max = m[4] === "" ? Infinity : Number(m[4]);
-      bounds = { min: Math.max(min, pattern.minBodyLength), max };
-    }
-  }
-  lengthBoundsCache.set(pattern, bounds);
-  return bounds;
 }
 function lastIndexAtMost(values, from, limit) {
   let lo = from;

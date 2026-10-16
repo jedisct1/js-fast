@@ -22,6 +22,51 @@ export function getBodyValidator(pattern: SimpleTokenPattern): RegExp {
 	return re;
 }
 
+export interface LengthBounds {
+	readonly min: number;
+	readonly max: number;
+}
+
+const CHARACTER_CLASS_WITH_LENGTH =
+	/^(\[(?:[^\\[\]]|\\.)+\])\{(\d{1,9})(?:(,)(\d{0,9}))?\}$/;
+const lengthBoundsCache = new WeakMap<
+	SimpleTokenPattern,
+	LengthBounds | null
+>();
+
+/**
+ * Return the allowed body lengths when that is all `bodyRegex` checks, or `null`.
+ *
+ * That is the case for a single character class with a length, when the class allows every character of the alphabet.
+ * The scanner then skips the regex.
+ */
+export function lengthBounds(pattern: SimpleTokenPattern): LengthBounds | null {
+	const cached = lengthBoundsCache.get(pattern);
+	if (cached !== undefined) return cached;
+
+	getBodyValidator(pattern);
+	let bounds: LengthBounds | null = null;
+	const m = CHARACTER_CLASS_WITH_LENGTH.exec(pattern.bodyRegex);
+	if (m) {
+		const charClass = new RegExp(`^${m[1]}$`);
+		let coversAlphabet = true;
+		for (const ch of pattern.bodyAlphabet.charToIndex.keys()) {
+			if (!charClass.test(ch)) {
+				coversAlphabet = false;
+				break;
+			}
+		}
+		if (coversAlphabet) {
+			const min = Number(m[2]);
+			let max = min;
+			if (m[3] !== undefined) max = m[4] === "" ? Infinity : Number(m[4]);
+			bounds = { min: Math.max(min, pattern.minBodyLength), max };
+		}
+	}
+	lengthBoundsCache.set(pattern, bounds);
+	return bounds;
+}
+
 const fullValidatorCache = new WeakMap<StructuredTokenPattern, RegExp>();
 function getFullValidator(pattern: StructuredTokenPattern): RegExp {
 	let re = fullValidatorCache.get(pattern);
