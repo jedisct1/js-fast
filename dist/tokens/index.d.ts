@@ -136,8 +136,10 @@ export declare class TokenEncryptor {
      * Add a pattern that is checked before the existing ones.
      *
      * Names must be unique.
+     * A simple pattern's `bodyRegex` must be a single character class with a
+     * length, and the class must allow every character of `bodyAlphabet`.
      *
-     * @throws TokenError if the name is taken.
+     * @throws TokenError if the name is taken or the regex has another form.
      */
     register(pattern: TokenPattern): void;
     destroy(): void;

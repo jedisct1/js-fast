@@ -857,6 +857,13 @@ function lengthBounds(pattern) {
   lengthBoundsCache.set(pattern, bounds);
   return bounds;
 }
+function isLengthOnly(pattern) {
+  try {
+    return lengthBounds(pattern) !== null;
+  } catch {
+    return false;
+  }
+}
 var fullValidatorCache = new WeakMap;
 function getFullValidator(pattern) {
   let re = fullValidatorCache.get(pattern);
@@ -1824,6 +1831,9 @@ class TokenEncryptor {
     this.assertAlive();
     if (this.patterns.some((p) => p.name === pattern.name)) {
       throw new TokenError(`A ${pattern.name} pattern is already registered`);
+    }
+    if (pattern.kind === "simple" && !isLengthOnly(pattern)) {
+      throw new TokenError(`Unsupported bodyRegex for ${pattern.name} pattern: use a single character class that allows every bodyAlphabet character, followed by a length`);
     }
     this.patterns.unshift(pattern);
   }

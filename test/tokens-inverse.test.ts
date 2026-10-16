@@ -969,7 +969,7 @@ describe("custom patterns with unsupported radices", () => {
 				kind: "simple",
 				name: "custom-simple",
 				prefix: "custom_",
-				bodyRegex: "[01]{8}",
+				bodyRegex: "[\\s\\S]{8}",
 				bodyAlphabet: alphabet,
 				minBodyLength: 8,
 			},
@@ -1237,6 +1237,27 @@ describe("register()", () => {
 		reference.register(ACCOUNT);
 		const text = `${GITHUB} acct_123456789012 other_123456789012`;
 		expect(enc.encrypt(text)).toBe(reference.encrypt(text));
+	});
+
+	test("accepts only one class covering the alphabet, with a length", () => {
+		const enc = new TokenEncryptor(KEY_07);
+		for (const pattern of BUILTIN_PATTERNS) {
+			if (pattern.kind === "simple") {
+				enc.register({ ...pattern, name: `copy-${pattern.name}` });
+			}
+		}
+
+		for (const [bodyRegex, bodyAlphabet] of [
+			["4[0-9]{7}", DIGITS],
+			["[a-f0-9]{8}", ALPHANUMERIC_LOWER],
+			["[0-9]{8,4}", DIGITS],
+		] as const) {
+			const narrow = { ...ACCOUNT, name: "narrow", bodyRegex, bodyAlphabet };
+			expect(() => enc.register(narrow)).toThrow(TokenError);
+			expect(() => enc.encryptToken("acct_41234567", "narrow")).toThrow(
+				UnknownPatternError,
+			);
+		}
 	});
 });
 

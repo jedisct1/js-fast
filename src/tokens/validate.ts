@@ -38,7 +38,7 @@ const lengthBoundsCache = new WeakMap<
  * Return the allowed body lengths when that is all `bodyRegex` checks, or `null`.
  *
  * That is the case for a single character class with a length, when the class allows every character of the alphabet.
- * The scanner then skips the regex.
+ * The scanner then skips the regex, and `register()` only accepts such patterns.
  */
 export function lengthBounds(pattern: SimpleTokenPattern): LengthBounds | null {
 	const cached = lengthBoundsCache.get(pattern);
@@ -65,6 +65,15 @@ export function lengthBounds(pattern: SimpleTokenPattern): LengthBounds | null {
 	}
 	lengthBoundsCache.set(pattern, bounds);
 	return bounds;
+}
+
+/** Whether `bodyRegex` compiles and only checks the body length. */
+export function isLengthOnly(pattern: SimpleTokenPattern): boolean {
+	try {
+		return lengthBounds(pattern) !== null;
+	} catch {
+		return false;
+	}
 }
 
 const fullValidatorCache = new WeakMap<StructuredTokenPattern, RegExp>();

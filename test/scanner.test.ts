@@ -112,6 +112,11 @@ describe("custom body regexes", () => {
 				aws,
 			]);
 			expect(find(pattern.prefix + invalid + AWS_KEY, pattern)).toEqual([aws]);
+
+			const outer = `sk-proj-${"A".repeat(48)}${pattern.prefix}${invalid}`;
+			expect(find(outer, pattern)).toEqual([
+				`openai@0-${outer.length}:${outer.slice(8)}`,
+			]);
 		});
 	}
 

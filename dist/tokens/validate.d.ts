@@ -12,9 +12,11 @@ export interface LengthBounds {
  * Return the allowed body lengths when that is all `bodyRegex` checks, or `null`.
  *
  * That is the case for a single character class with a length, when the class allows every character of the alphabet.
- * The scanner then skips the regex.
+ * The scanner then skips the regex, and `register()` only accepts such patterns.
  */
 export declare function lengthBounds(pattern: SimpleTokenPattern): LengthBounds | null;
+/** Whether `bodyRegex` compiles and only checks the body length. */
+export declare function isLengthOnly(pattern: SimpleTokenPattern): boolean;
 export declare function heuristicMarker(patternName: string): string;
 export declare function isInAlphabet(s: string, alphabet: Alphabet): boolean;
 /**

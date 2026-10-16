@@ -29,6 +29,7 @@ import type {
 import {
 	formatStructured,
 	heuristicMarker,
+	isLengthOnly,
 	parseStructured,
 	segmentClass,
 	tokenBody,
@@ -561,13 +562,20 @@ export class TokenEncryptor {
 	 * Add a pattern that is checked before the existing ones.
 	 *
 	 * Names must be unique.
+	 * A simple pattern's `bodyRegex` must be a single character class with a
+	 * length, and the class must allow every character of `bodyAlphabet`.
 	 *
-	 * @throws TokenError if the name is taken.
+	 * @throws TokenError if the name is taken or the regex has another form.
 	 */
 	register(pattern: TokenPattern): void {
 		this.assertAlive();
 		if (this.patterns.some((p) => p.name === pattern.name)) {
 			throw new TokenError(`A ${pattern.name} pattern is already registered`);
+		}
+		if (pattern.kind === "simple" && !isLengthOnly(pattern)) {
+			throw new TokenError(
+				`Unsupported bodyRegex for ${pattern.name} pattern: use a single character class that allows every bodyAlphabet character, followed by a length`,
+			);
 		}
 		this.patterns.unshift(pattern);
 	}

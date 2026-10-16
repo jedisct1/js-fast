@@ -307,29 +307,6 @@ describe("scanner tests", () => {
 		enc.destroy();
 	});
 
-	test("strict bodyRegex prevents false truncation on custom pattern", () => {
-		const enc = new TokenEncryptor(TEST_KEY);
-		// Register a pattern where bodyRegex is stricter than bodyAlphabet:
-		// alphabet allows all alphanumeric, but regex only allows uppercase.
-		enc.register({
-			kind: "simple",
-			name: "strict-upper",
-			prefix: "foo_",
-			bodyRegex: "[A-Z]{8}",
-			bodyAlphabet: ALPHANUMERIC,
-			minBodyLength: 8,
-		});
-		// sk-proj- body contains "foo_abcdefgh" -- lowercase body fails regex.
-		const body = `${"A".repeat(48)}foo_abcdefgh`;
-		const token = `sk-proj-${body}`;
-		const encrypted = enc.encrypt(token);
-		// Should NOT split at foo_ since "abcdefgh" fails [A-Z]{8}.
-		expect(encrypted.startsWith("sk-proj-")).toBe(true);
-		expect(encrypted).not.toContain("foo_abcdefgh");
-		expect(enc.decrypt(encrypted)).toBe(token);
-		enc.destroy();
-	});
-
 	test("tokens embedded in text are found", () => {
 		const token = SAMPLE_TOKENS["aws-access-key"]!;
 		const text = `key=${token}&secret=foo`;
