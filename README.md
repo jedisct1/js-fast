@@ -1,33 +1,34 @@
 # FAST implementation for JavaScript
 
-This package implements FAST (Format-preserving, Additive, Symmetric Translation) in TypeScript.
+Encrypt data with FAST without changing its length or allowed characters.
 
-FAST encrypts data without changing its length or the set of characters it can use.
-For example, a 16-digit number stays a 16-digit number after encryption.
+A 16-digit number stays a 16-digit number after encryption.
+That's useful when you're encrypting values like:
+
+- Numeric IDs
+- Records stored as bytes
 
 You choose the input length and the number of allowed symbols, called the radix.
-This lets you encrypt values such as numeric IDs or records stored as bytes.
 
-This package works with other FAST implementations.
+The package implements FAST (Format-preserving, Additive, Symmetric Translation) in TypeScript, and it works with other FAST implementations.
 
 ## Installation
-
-Install from npm:
 
 ```bash
 npm install fast-cipher
 ```
 
-With Bun:
+That installs the package from npm.
+If you're using Bun instead:
 
 ```bash
 bun add fast-cipher
 ```
 
-The package uses JavaScript modules (ESM) and includes both the JavaScript files in `dist/` and TypeScript types.
+The package uses JavaScript modules (ESM) and ships with JavaScript files in `dist/` and TypeScript types.
 You can use the same import in Bun, Node.js, and TypeScript projects.
 
-For Node.js, use version 20 or newer.
+For Node.js, you'll need version 20 or newer.
 Also, add `"type": "module"` to your `package.json` or use `.mjs` files for your entry points.
 
 ## Usage
@@ -77,12 +78,14 @@ cipher.destroy();
 
 ### Tweaks
 
-A tweak is an extra value that lets you encrypt the same input differently while keeping the same key.
-For example, you can use a different tweak for each document so that repeated values do not always produce the same encrypted output across documents.
+Want to encrypt the same input differently without changing the key?
+That's what a tweak is for: it's an extra value you pass in alongside the input.
+
+For example, you can use a different tweak for each document so repeated values don't always produce the same encrypted output across documents.
 Two outputs can still match by chance.
 
-If you reuse the same input, key, and tweak, you always get the same encrypted output.
-To decrypt it, use the same tweak you used for encryption.
+Reuse the same input, key, and tweak, and you'll always get the same encrypted output.
+To decrypt it, you'll need the same tweak you used for encryption.
 
 ```ts
 const params = calculateRecommendedParams(10, 8);
@@ -103,14 +106,13 @@ console.log(ctB);
 
 ### `calculateRecommendedParams(radix, wordLength, securityLevel?)`
 
-Returns a `FastParams` object with recommended settings for the given radix and input length.
+Returns a `FastParams` object with recommended settings for your radix and input length.
 It follows the FAST rules for choosing rounds and branch distances.
-By default, it uses a pool of 256 substitution tables (S-boxes) and a security level of 128 bits.
+By default, you get a pool of 256 substitution tables (S-boxes) and a security level of 128 bits.
 
-For inputs with five symbols, `branchDist2` is limited to `wordLength - branchDist1 - 1`.
-This gives branch distances of 3 and 1.
+For inputs with five symbols, `branchDist2` is limited to `wordLength - branchDist1 - 1`, giving branch distances of 3 and 1.
 Other FAST implementations must use the same limit to decrypt these outputs.
-However, the current zig-fast implementation still rejects inputs with five symbols.
+But the current zig-fast implementation still rejects inputs with five symbols.
 
 ### `FastCipher.create(params, key)`
 
@@ -146,8 +148,9 @@ The package exports `FastError` and these error classes for invalid inputs and s
 
 ## Token Encryption
 
-Import `TokenEncryptor` from `fast-cipher/tokens` to find and encrypt known API keys and access tokens in text.
-It replaces each token with its encrypted version.
+Need to encrypt API keys or access tokens in text?
+Import `TokenEncryptor` from `fast-cipher/tokens`.
+It finds known tokens and replaces each one with its encrypted version.
 
 Tokens with a known prefix keep their length, prefix, and allowed characters.
 Tokens without a fixed prefix get an extra marker, as described below.
@@ -178,40 +181,70 @@ enc.destroy();
 
 There are three kinds of built-in patterns.
 
-**Prefix-based patterns** keep prefixes such as `ghp_`, `sk-proj-`, and `AKIA` unchanged while encrypting the rest of the token.
+**Prefix-based patterns** encrypt the rest of the token but leave prefixes like these alone:
+
+- `ghp_`
+- `sk-proj-`
+- `AKIA`
+
 The encrypted token has the same length, prefix, and allowed characters as the original.
 
-These patterns cover OpenAI, Anthropic, GitHub, GitLab, AWS access keys, Stripe, Google, Twilio, npm, PyPI, Datadog, Vercel, Supabase, Hugging Face, and Grafana.
+These patterns cover:
+
+- OpenAI
+- Anthropic
+- GitHub
+- GitLab
+- AWS access keys
+- Stripe
+- Google
+- Twilio
+- npm
+- PyPI
+- Datadog
+- Vercel
+- Supabase
+- Hugging Face
+- Grafana
 
 **Structured patterns** split tokens at separators and encrypt each part.
 The prefix, separators, and allowed characters stay unchanged.
-For example, SendGrid uses `SG.<part1>.<part2>`, while Slack bot tokens use `xoxb-<part1>-<part2>-<part3>`.
+Here are some examples:
 
-Slack user tokens use `xoxp-<id1>-<id2>-<id3>-<secret>`.
-The three-part `xoxp-` form is also supported.
+- SendGrid: `SG.<part1>.<part2>`
+- Slack bot tokens: `xoxb-<part1>-<part2>-<part3>`
+- Slack user tokens: `xoxp-<id1>-<id2>-<id3>-<secret>`
+
+The three-part `xoxp-` form works too.
 Slack parts made up of digits stay that way after encryption, as explained in [Keeping Slack token parts in the right character set](#keeping-slack-token-parts-in-the-right-character-set).
 
-**Heuristic patterns** look for likely tokens without a fixed prefix, such as Fastly API tokens and AWS secret keys.
+**Heuristic patterns** look for likely tokens without a fixed prefix, such as:
+
+- Fastly API tokens
+- AWS secret keys
+
 They check the length, surrounding characters, how random the value looks, and which kinds of characters it uses.
 
-Encryption adds an `[ENCRYPTED:<name>]` marker so that `decrypt()` can find these tokens without changing ordinary text that happens to look like a token.
+Encryption adds an `[ENCRYPTED:<name>]` marker so `decrypt()` can find these tokens without changing ordinary text that happens to look like a token.
 The encrypted body keeps its length and allowed characters, but the marker makes the full result longer.
 
-These patterns are enabled by default, but you can leave them out with the `types` option.
+These patterns are on by default.
+You can leave them out with the `types` option.
 
 ### Decrypting Recorded Tokens
 
 `decrypt(text)` scans the encrypted text to find tokens again.
-This usually works, but encrypted text can contain another pattern's prefix by chance.
+That usually works, but encrypted text can contain another pattern's prefix by chance.
 
 For example, an encrypted Stripe key can contain `AKIA` followed by 16 uppercase letters or digits.
-The scanner then treats that section as an AWS access key, splits the Stripe key, and cannot recover the original token.
-The same problem can happen when an application adds a custom prefix or a later package version adds a built-in one.
+The scanner then treats that section as an AWS access key, splits the Stripe key, and can't recover the original token.
+You can hit the same problem if your application adds a custom prefix or a later package version adds a built-in one.
 
 To make sure you can recover the original token, save each span's `encrypted` value and `patternName`, then pass them to `decryptToken()`.
-Do not save `original` unless you need to keep the unencrypted secret.
+Don't save `original` unless you need to keep the unencrypted secret.
 
-You can decrypt the saved values later or in another process, as long as you use the same key and tweak.
+You can decrypt the saved values later or in another process.
+Just use the same key and tweak.
 
 ```ts
 const encryptedResult = enc.encryptWithSpans(text);
@@ -244,15 +277,17 @@ For example, a format error says `Malformed slack-bot token`.
 
 ### Keeping Slack token parts in the right character set
 
-Each part of a Slack token can use one of two character sets.
-A part made up of digits uses only the ten digits.
-A part containing a letter uses the 62 uppercase letters, lowercase letters, and digits.
+Each part of a Slack token uses one of two character sets:
 
-However, a value such as `siXA` can first encrypt to `1234`.
-Without another check, decryption would mistake it for a part that uses only digits and choose the wrong character set.
+- A part made up of digits uses only the ten digits.
+- A part containing a letter uses the 62 uppercase letters, lowercase letters, and digits.
 
-To prevent this, the value is encrypted again with the original character set until the result contains a letter.
-This process is called cycle walking, and decryption follows the same steps in reverse.
+But a value like `siXA` can first encrypt to `1234`.
+Without another check, decryption would mistake it for a digits-only part and choose the wrong character set.
+
+So the value is encrypted again with the original character set until the result contains a letter.
+That's called cycle walking, and decryption follows the same steps in reverse.
+
 Parts made up of digits always encrypt to digits.
 Patterns with fixed character sets, such as SendGrid, finish in one step.
 
@@ -282,7 +317,7 @@ const untweaked = enc.decrypt(tweaked, { tweak });
 
 Use the same `types` filter and `tweak` when decrypting.
 
-A different tweak for each document means that repeated tokens do not always produce the same encrypted output across documents.
+Use a different tweak for each document so repeated tokens don't always produce the same encrypted output across documents.
 Outputs can still match by chance.
 
 ### Custom Patterns
@@ -314,20 +349,27 @@ The package exports these alphabets for custom patterns:
 - `HEX_LOWER`
 - `TOKEN67`, used for wrapped tokens
 
-A custom alphabet must have an integer radix from 4 to 256.
-If it does not, encryption throws `TokenError` with a message that identifies the pattern's alphabet settings.
+Your custom alphabet must have an integer radix from 4 to 256.
+If it doesn't, encryption throws `TokenError` with a message that identifies the pattern's alphabet settings.
 
-A token's body runs until the first character that is not in `bodyAlphabet`.
-If another token starts inside that run, the body can end there instead, provided that what comes before is still a valid body.
+A token's body runs until the first character that isn't in `bodyAlphabet`.
+If another token starts inside that run, the body can end there instead, as long as what comes before is still a valid body.
 
-With the built-in patterns, scanning time grows roughly in proportion to the length of the text, even when the text is packed with prefixes.
-A custom pattern keeps that property when its `bodyRegex` is a single character class followed by a length, such as `[A-Za-z0-9]{32}` or `[A-Za-z0-9_-]{20,}`, and the class accepts every character of `bodyAlphabet`.
+With the built-in patterns, scanning time grows roughly in proportion to the text's length, even when it's packed with prefixes.
+Your custom pattern keeps that property if its `bodyRegex` is a single character class followed by a length, and the class accepts every character of `bodyAlphabet`.
+For example:
+
+- `[A-Za-z0-9]{32}`
+- `[A-Za-z0-9_-]{20,}`
+
 Any other regex still works, but the scanner has to run it on each possible body, from the start of the body.
 A long run of body characters with many other tokens inside, or many copies of the pattern's prefix, can then make scanning much slower.
 The same goes for a structured pattern whose `parse()` reads the whole body.
 
 The scanner remembers what it learns from a pattern the first time it uses it.
-Once a pattern has been used, do not change it or its alphabet; register a new pattern object instead.
+Once a pattern has been used, don't change it or its alphabet.
+Register a new pattern object instead.
+
 A structured pattern's `parse()` can also be called several times on the same body, so it must always return the same answer.
 
 ## Wrapped Tokens
@@ -335,9 +377,13 @@ A structured pattern's `parse()` can also be called several times on the same bo
 Keeping the original token format is useful, but decryption has to find the tokens again.
 That can fail, as explained in [Decrypting Recorded Tokens](#decrypting-recorded-tokens).
 
-Instead, `encryptWrapped()` replaces each token it finds with an `{ENCRYPTED:<payload>}` wrapper.
-The wrapper clearly marks where the encrypted value starts and ends.
-As a result, `decryptWrapped()` can find it without saved positions, pattern names, or a list of registered patterns.
+If you don't need to keep that format, `encryptWrapped()` replaces each token it finds with an `{ENCRYPTED:<payload>}` wrapper.
+The wrapper marks where the encrypted value starts and ends.
+So `decryptWrapped()` can find it without any of these:
+
+- Saved positions
+- Pattern names
+- A list of registered patterns
 
 ```ts
 const enc = new TokenEncryptor(key);
@@ -350,7 +396,7 @@ const wrapped = enc.encryptWrapped(
 const restored = new TokenEncryptor(key).decryptWrapped(wrapped);
 ```
 
-The whole token is encrypted, including its prefix and separators, so the wrapper does not show which service it belongs to.
+The whole token is encrypted, including its prefix and separators, so the wrapper doesn't show which service it belongs to.
 The payload inside the braces is eight symbols longer than the token.
 With the marker and braces included, the wrapper is exactly 20 characters longer than the token.
 
@@ -360,22 +406,31 @@ You just need the same key and tweak.
 
 Token detection works the same way as `encrypt()`, including the `types` filter.
 It can still miss tokens or mistake ordinary text for a token.
-Wrapping makes detected tokens easier to recover; it does not improve detection.
+Wrapping makes detected tokens easier to recover, but it doesn't improve detection.
 
 ### Options and limits
 
-`encryptWrapped(text, options?)` accepts `types`, `tweak`, and `maxTokenLength`.
+`encryptWrapped(text, options?)` accepts:
 
-`decryptWrapped(text, options?)` accepts `tweak`, `maxTokenLength`, and `onInvalid`.
-It has no `types` option because it looks for wrappers, not token patterns.
+- `types`
+- `tweak`
+- `maxTokenLength`
+
+`decryptWrapped(text, options?)` accepts:
+
+- `tweak`
+- `maxTokenLength`
+- `onInvalid`
+
+There's no `types` option for wrapped decryption because it looks for wrappers, not token patterns.
 
 `maxTokenLength` limits the work needed for a single wrapper.
 It defaults to 512 characters and must be a whole number from 2 to 4,096.
-With the eight extra symbols, a payload can therefore be no longer than 4,104 symbols.
+With the eight extra symbols, that means a payload can be no longer than 4,104 symbols.
 
 Several built-in patterns, such as OpenAI and Stripe keys, have no maximum length.
 If a matched token is longer than the limit, encryption throws an error instead of leaving the token unencrypted.
-If you raise the limit for encryption, raise it for decryption as well.
+If you raise the limit for encryption, raise it for decryption too.
 
 On an Apple M5 Max, the first call that encrypts or decrypts wrappers on a `TokenEncryptor` takes about 3.5 ms to set up its key and S-box pool.
 After that, each wrapper takes about this long to encrypt or decrypt:
@@ -391,14 +446,14 @@ So if your service decrypts text from untrusted sources, also limit document siz
 
 ### Handling invalid wrappers
 
-By default, `decryptWrapped()` uses strict mode.
-It returns a string only if every possible wrapper is valid.
+By default, `decryptWrapped()` uses strict mode: you get a string only if every possible wrapper is valid.
 Otherwise, it throws an error without returning partial output.
 
 Each `{ENCRYPTED:` marker starts a possible wrapper, called a candidate.
 The decoder reads the run of allowed symbols after it.
 That run must contain between 10 and `maxTokenLength + 8` symbols and end with `}`.
-The format of every candidate is checked before anything is decrypted.
+
+The decoder checks every candidate's format before decrypting anything.
 
 There are two wrapper errors:
 
@@ -410,13 +465,15 @@ There are two wrapper errors:
 Both errors extend `TokenError`.
 Their messages never include tokens, payloads, tweaks, keys, or pattern names.
 
-To leave invalid wrappers in the text, use `{ onInvalid: "preserve" }`.
+Want to leave invalid wrappers in the text?
+Use `{ onInvalid: "preserve" }`.
 The method then returns `{ text, preservedCandidates }` instead of a string.
+
 Valid wrappers are decrypted, while each invalid candidate is left unchanged and counted once.
 
 A candidate ends at the first character outside the wrapper alphabet.
-The decoder includes that character in the candidate only if it is `}`.
-This way, a stray or quoted opening marker does not hide later wrappers.
+The decoder includes that character in the candidate only if it's `}`.
+So a stray or quoted opening marker doesn't hide later wrappers.
 
 ```ts
 const result = enc.decryptWrapped(`say "{ENCRYPTED:" then ${wrapped}`, {
@@ -431,25 +488,25 @@ For example, in `{ENCRYPTED:{ENCRYPTED:...}}`, preserve mode keeps the outer ope
 It decrypts the inner wrapper only if that wrapper passes its own check.
 Recovered tokens are never scanned again.
 
-Preserve mode does not ignore every error.
-Invalid options, a destroyed `TokenEncryptor`, and other errors unrelated to wrapper validation still cause it to throw.
+Preserve mode doesn't ignore every error.
+It still throws for invalid options, a destroyed `TokenEncryptor`, and other errors unrelated to wrapper validation.
 
 In TypeScript, the return type is `string` in the default mode and `WrappedDecryptResult` for `onInvalid: "preserve"`.
-If the mode is only known at run time, the return type allows either result.
+If you only know the mode at run time, the return type allows either result.
 
 ### Working with stored or incoming text
 
 Encrypt only newly received, unencrypted text, then store the wrapped result.
-`encryptWrapped()` rejects any text that already contains `{ENCRYPTED:`, even if it is not a valid wrapper.
-It cannot tell a marker that is just part of the text from one meant for decryption.
+`encryptWrapped()` rejects any text that already contains `{ENCRYPTED:`, even if it isn't a valid wrapper.
+It can't tell a marker that's just part of the text from one meant for decryption.
 
 So if you run it again on a history that contains wrappers, it throws an error rather than nesting or skipping them.
 
 Use strict decryption to check stored text or whenever you need to know that all wrappers passed validation.
-Preserve mode is useful for displaying incomplete text from a stream or pasted text.
-The `preservedCandidates` count tells you how many candidates could not be recovered, but not where they are.
 
-Keep in mind that a successful preserve-mode result can mix recovered tokens with text that was never checked.
+Preserve mode is useful for displaying incomplete text from a stream or pasted text.
+The `preservedCandidates` count tells you how many candidates couldn't be recovered, but not where they are.
+Just keep in mind that a successful preserve-mode result can mix recovered tokens with text that was never checked.
 
 ### Integrity and privacy limits
 
@@ -461,29 +518,34 @@ The cryptographic term is a strong tweakable pseudorandom permutation.
 Under that assumption, a forged or damaged wrapper passes the check with a probability of about 67^-8, or 2.5e-15, per attempt.
 That is roughly 48.5 bits of protection, and the chance of a successful forgery grows with more attempts.
 
-This is not standard authenticated encryption, and it does not provide 128-bit protection against forgery.
+This isn't standard authenticated encryption, and it doesn't provide 128-bit protection against forgery.
 
 The same token always produces the same wrapper when the key and tweak are the same.
 The wrapper also reveals the token's length.
-The check symbols do not add randomness, so anyone who can encrypt can try all possible values of a short custom token and compare the results.
+The check symbols don't add randomness, so anyone who can encrypt can try all possible values of a short custom token and compare the results.
 
 A valid wrapper can be reused, moved, or replaced with another valid wrapper under the same key and tweak.
 Removing a whole wrapper also goes undetected.
 
-The wrapper checks do not protect the surrounding text, the order of wrappers, or whether parts of a document are missing.
+The wrapper checks don't protect:
+
+- The surrounding text
+- The order of wrappers
+- Whether parts of a document are missing
+
 If you need those guarantees, also protect the whole document with authenticated encryption or another form of authentication.
 
 Use a different tweak for each customer or conversation to keep wrappers from being reused across them.
-Keep the tweak yourself, because it is not stored in the wrapper.
+Keep the tweak yourself, because it isn't stored in the wrapper.
 Leaving out the tweak is the same as using an empty one.
 
 ### Wrapped format, version 1
 
-This section gives the exact format so that other implementations can read and write the same wrappers.
+Here's the exact format if you want another implementation to read and write the same wrappers.
 
 The shared test cases in [`test/fixtures/wrapped-tokens-v1.json`](test/fixtures/wrapped-tokens-v1.json) include expected keys, tweaks, settings, and payloads.
 They also cover invalid wrappers and whole documents.
-Check them before relying on another implementation to produce the same results.
+Check them before you rely on another implementation to produce the same results.
 
 The alphabet has 67 symbols, in this order:
 
@@ -555,39 +617,6 @@ The candidate has a valid format only if those symbols are followed by `}` and t
 If the run ends with `}`, the next search starts after that brace.
 Otherwise, it starts at the character that ended the run.
 Any future format that is not compatible with version 1 must use a different opening marker.
-
-## Development
-
-Run the formatter:
-
-```bash
-bunx biome format --write src test
-```
-
-Run lint/style checks:
-
-```bash
-bunx biome check src test
-```
-
-Build the package before running the test suite, since the package import tests load `dist/`:
-
-```bash
-bun run build
-bun test
-```
-
-Run type checking:
-
-```bash
-bunx tsc --noEmit
-```
-
-Build the package:
-
-```bash
-bun run build
-```
 
 ## References
 
