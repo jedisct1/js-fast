@@ -975,6 +975,9 @@ function lastIndexAtMost(values, from, limit) {
   }
   return lo - 1;
 }
+function isSeparator(text, pos) {
+  return text[pos] === "-" || text[pos] === "_";
+}
 
 class RunEnds {
   text;
@@ -1018,7 +1021,7 @@ class Boundaries {
   text;
   occurrences = new Map;
   positions;
-  starts;
+  ends;
   first;
   constructor(text, allPatterns) {
     this.text = text;
@@ -1033,15 +1036,20 @@ class Boundaries {
     }
     this.positions = sortedUnique(found);
     if (this.positions.length === 0) {
-      this.starts = NO_OFFSETS;
+      this.ends = NO_OFFSETS;
       this.first = 0;
       return;
     }
-    this.starts = new Int32Array(this.positions.length);
-    this.first = this.starts.length;
-    this.findStarts(allPatterns);
+    let separators = 0;
+    for (let i = 0;i < text.length; i++) {
+      if (isSeparator(text, i))
+        separators++;
+    }
+    this.ends = new Int32Array(this.positions.length + separators);
+    this.first = this.ends.length;
+    this.findEnds(allPatterns);
   }
-  findStarts(allPatterns) {
+  findEnds(allPatterns) {
     const { text } = this;
     const byFirstChar = new Map;
     const unprefixed = [];
@@ -1061,11 +1069,19 @@ class Boundaries {
       }
       group.push(pattern);
     }
+    let lowestEnd = text.length + 1;
     for (let k = this.positions.length - 1;k >= 0; k--) {
       const pos = this.positions[k];
+      if (pos >= lowestEnd)
+        continue;
       const group = byFirstChar.get(text[pos]);
       if (group !== undefined && this.tokenStartsAt(pos, group, runs) || this.tokenStartsAt(pos, unprefixed, runs)) {
-        this.starts[--this.first] = pos;
+        lowestEnd = pos;
+        while (isSeparator(text, lowestEnd - 1))
+          lowestEnd--;
+        for (let end = pos;end >= lowestEnd; end--) {
+          this.ends[--this.first] = end;
+        }
       }
     }
   }
@@ -1099,9 +1115,9 @@ class Boundaries {
       return -1;
     const bounds = lengthBounds(pattern);
     if (bounds) {
-      const k = lastIndexAtMost(this.starts, this.first, Math.min(bodyEnd - 1, bodyStart + bounds.max));
-      if (k >= this.first && this.starts[k] >= bodyStart + Math.max(bounds.min, 1)) {
-        return this.starts[k];
+      const k = lastIndexAtMost(this.ends, this.first, Math.min(bodyEnd, bodyStart + bounds.max));
+      if (k >= this.first && this.ends[k] >= bodyStart + Math.max(bounds.min, 1)) {
+        return this.ends[k];
       }
       const length = bodyEnd - bodyStart;
       return length >= bounds.min && length <= bounds.max ? bodyEnd : -1;
@@ -1136,13 +1152,13 @@ class Boundaries {
     return this.structuredEnd(pattern, pos, pos + match[0].length);
   }
   split(bodyStart, bodyEnd, validateLeft) {
-    const { starts, first } = this;
-    for (let k = lastIndexAtMost(starts, first, bodyEnd - 1);k >= first; k--) {
-      const splitPos = starts[k];
-      if (splitPos <= bodyStart)
+    const { ends, first } = this;
+    for (let k = lastIndexAtMost(ends, first, bodyEnd);k >= first; k--) {
+      const end = ends[k];
+      if (end <= bodyStart)
         break;
-      if (validateLeft(this.text.slice(bodyStart, splitPos)))
-        return splitPos;
+      if (validateLeft(this.text.slice(bodyStart, end)))
+        return end;
     }
     return -1;
   }

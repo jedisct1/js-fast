@@ -107,6 +107,14 @@ export const ADVERSARIAL_TEXTS: Record<string, (size: number) => string> = {
 	"slack user + glc_": (n) => `xoxp-1-1-1-${repeatTo("glc_", n - 11)}`,
 	"sendgrid + AIza": (n) => `SG.${repeatTo("AIza", n - 3)}`,
 	"adjacent Slack tokens": (n) => repeatTo(SAMPLE_TOKENS["slack-bot"]!, n),
+	"dash-separated SendGrid tokens": (n) =>
+		repeatTo(`${SAMPLE_TOKENS.sendgrid}-`, n),
+	"dash-separated GitLab tokens": (n) =>
+		repeatTo(`${SAMPLE_TOKENS.gitlab}-`, n),
+	"GitLab tokens with a long separator": (n) => {
+		const token = SAMPLE_TOKENS.gitlab!;
+		return token.padEnd(n - token.length, "-") + token;
+	},
 	mixed: (n) =>
 		repeatTo("AKIAglc_AIzasbp_pypi-hf_SKnpm_vercel_sk-proj-xoxb-1-1-", n),
 };

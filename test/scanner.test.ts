@@ -146,6 +146,23 @@ describe("custom body regexes", () => {
 		]);
 	});
 
+	for (const bodyRegex of ["[A-Za-z0-9_-]{8}", "X[A-Za-z0-9_-]{7}"]) {
+		test(`a body matching ${bodyRegex} keeps its own trailing dashes`, () => {
+			const pattern = simple("punctuated", "tok:", bodyRegex, BASE64URL, 8);
+			const token = "tok:XAAA___-";
+			expect(find(`${token}__--${AWS_KEY}`, pattern)).toEqual([
+				"punctuated@0-12:XAAA___-",
+				awsAt(16),
+			]);
+			for (const suffix of ["-", "__--AKIAshort", `A-${AWS_KEY}`]) {
+				const names = scan(token + suffix, [pattern, ...BUILTIN_PATTERNS]).map(
+					(s) => s.pattern.name,
+				);
+				expect(names).not.toContain("punctuated");
+			}
+		});
+	}
+
 	test("a token can start at the last character of a body", () => {
 		const inner = simple("inner", "a-", "[0-9]{2}", DIGITS, 2);
 		const text = `x${"b".repeat(3)}a-12`;

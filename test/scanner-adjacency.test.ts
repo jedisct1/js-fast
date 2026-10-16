@@ -50,6 +50,8 @@ const SLACK: Fixture[] = [
 	},
 ];
 
+const SEPARATORS = ["", "-", "_", "-_--"];
+
 function spanAt(start: number, { name, prefix, token }: Fixture): string {
 	return `${name}@${start}-${start + token.length}:${token.slice(prefix.length)}`;
 }
@@ -85,9 +87,11 @@ function expectRoundTrips(text: string, count: number): void {
 describe("tokens next to each other are all found", () => {
 	for (const fixture of [SENDGRID, GITLAB, ...SLACK]) {
 		test(`four ${fixture.label} tokens`, () => {
-			const { text, spans } = join(Array(4).fill(fixture), "");
-			expect(find(text)).toEqual(spans);
-			expectRoundTrips(text, 4);
+			for (const separator of SEPARATORS) {
+				const { text, spans } = join(Array(4).fill(fixture), separator);
+				expect(find(text)).toEqual(spans);
+				expectRoundTrips(text, 4);
+			}
 		});
 	}
 
@@ -97,16 +101,28 @@ describe("tokens next to each other are all found", () => {
 			if (left === right) continue;
 			test(`${left.label} then ${right.label}`, () => {
 				const leftOnly = BUILTIN_PATTERNS.filter((p) => p.name === left.name);
-				const { text, spans } = join([left, right], "");
-				expect(find(text)).toEqual(spans);
-				expect(find(text, leftOnly)).toEqual(spans.slice(0, 1));
-				expectRoundTrips(text, 2);
+				for (const separator of SEPARATORS) {
+					const { text, spans } = join([left, right], separator);
+					expect(find(text)).toEqual(spans);
+					expect(find(text, leftOnly)).toEqual(spans.slice(0, 1));
+					expectRoundTrips(text, 2);
+				}
 			});
 		}
 	}
 });
 
 describe("a body only stops early before a valid token", () => {
+	for (const fixture of [SENDGRID, GITLAB]) {
+		test(fixture.label, () => {
+			for (const suffix of ["Z", "-", `-${fixture.prefix}short`]) {
+				expect(find(fixture.token + suffix)).toEqual([]);
+			}
+			const { text, spans } = join([fixture, fixture], "Z");
+			expect(find(text)).toEqual(spans.slice(1));
+		});
+	}
+
 	for (const fixture of SLACK) {
 		test(fixture.label, () => {
 			const { name, prefix, token } = fixture;

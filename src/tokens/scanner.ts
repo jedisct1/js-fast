@@ -96,6 +96,10 @@ function lastIndexAtMost(
 	return lo - 1;
 }
 
+function isSeparator(text: string, pos: number): boolean {
+	return text[pos] === "-" || text[pos] === "_";
+}
+
 /**
  * Find where the run of alphabet characters starting at a position ends.
  *
@@ -143,13 +147,15 @@ type PrefixedPattern = SimpleTokenPattern | StructuredTokenPattern;
  * Token boundaries for one text.
  *
  * A body can end early where another prefixed token starts, and whether a token starts at a position only depends on the text from there on.
- * So every prefix position is checked once, from the end of the text backward, and the ones where a token starts are kept in order.
- * Each check can then look up the token starts to its right instead of searching again.
+ * So every prefix position is checked once, from the end of the text backward, and the places where a body can end are kept in order.
+ * Each check can then look them up instead of searching again.
+ *
+ * A body can end where a token starts, or anywhere in the dashes and underscores right before it.
  */
 class Boundaries {
 	private readonly occurrences = new Map<string, readonly number[]>();
 	private readonly positions: Int32Array;
-	private readonly starts: Int32Array;
+	private readonly ends: Int32Array;
 	private first: number;
 
 	constructor(
@@ -165,17 +171,21 @@ class Boundaries {
 		}
 		this.positions = sortedUnique(found);
 		if (this.positions.length === 0) {
-			this.starts = NO_OFFSETS;
+			this.ends = NO_OFFSETS;
 			this.first = 0;
 			return;
 		}
-		this.starts = new Int32Array(this.positions.length);
-		this.first = this.starts.length;
-		this.findStarts(allPatterns);
+		let separators = 0;
+		for (let i = 0; i < text.length; i++) {
+			if (isSeparator(text, i)) separators++;
+		}
+		this.ends = new Int32Array(this.positions.length + separators);
+		this.first = this.ends.length;
+		this.findEnds(allPatterns);
 	}
 
-	/** Check every prefix position from right to left, and keep the ones where a token starts. */
-	private findStarts(allPatterns: readonly TokenPattern[]): void {
+	/** Check every prefix position from right to left, and keep where a body can end. */
+	private findEnds(allPatterns: readonly TokenPattern[]): void {
 		const { text } = this;
 		const byFirstChar = new Map<string, PrefixedPattern[]>();
 		const unprefixed: PrefixedPattern[] = [];
@@ -195,14 +205,21 @@ class Boundaries {
 			group.push(pattern);
 		}
 
+		let lowestEnd = text.length + 1;
 		for (let k = this.positions.length - 1; k >= 0; k--) {
 			const pos = this.positions[k]!;
+			// Already kept as part of the separators before a later token.
+			if (pos >= lowestEnd) continue;
 			const group = byFirstChar.get(text[pos]!);
 			if (
 				(group !== undefined && this.tokenStartsAt(pos, group, runs)) ||
 				this.tokenStartsAt(pos, unprefixed, runs)
 			) {
-				this.starts[--this.first] = pos;
+				lowestEnd = pos;
+				while (isSeparator(text, lowestEnd - 1)) lowestEnd--;
+				for (let end = pos; end >= lowestEnd; end--) {
+					this.ends[--this.first] = end;
+				}
 			}
 		}
 	}
@@ -238,8 +255,8 @@ class Boundaries {
 	/**
 	 * Return where a simple token starting at `pos` ends, or -1.
 	 *
-	 * The body runs to the end of its alphabet run, unless it can end at a later token start.
-	 * The last such start with a valid body before it wins.
+	 * The body runs to the end of its alphabet run, unless it can stop earlier before another token.
+	 * The longest valid body wins.
 	 */
 	simpleEnd(pattern: SimpleTokenPattern, pos: number, runs: RunEnds): number {
 		const bodyStart = pos + pattern.prefix.length;
@@ -249,15 +266,15 @@ class Boundaries {
 		const bounds = lengthBounds(pattern);
 		if (bounds) {
 			const k = lastIndexAtMost(
-				this.starts,
+				this.ends,
 				this.first,
-				Math.min(bodyEnd - 1, bodyStart + bounds.max),
+				Math.min(bodyEnd, bodyStart + bounds.max),
 			);
 			if (
 				k >= this.first &&
-				this.starts[k]! >= bodyStart + Math.max(bounds.min, 1)
+				this.ends[k]! >= bodyStart + Math.max(bounds.min, 1)
 			) {
-				return this.starts[k]!;
+				return this.ends[k]!;
 			}
 			const length = bodyEnd - bodyStart;
 			return length >= bounds.min && length <= bounds.max ? bodyEnd : -1;
@@ -302,17 +319,17 @@ class Boundaries {
 		return this.structuredEnd(pattern, pos, pos + match[0].length);
 	}
 
-	/** Return the last token start inside the body with a valid body before it, or -1. */
+	/** Return the end of the longest valid body that stops before another token, or -1. */
 	private split(
 		bodyStart: number,
 		bodyEnd: number,
 		validateLeft: (body: string) => boolean,
 	): number {
-		const { starts, first } = this;
-		for (let k = lastIndexAtMost(starts, first, bodyEnd - 1); k >= first; k--) {
-			const splitPos = starts[k]!;
-			if (splitPos <= bodyStart) break;
-			if (validateLeft(this.text.slice(bodyStart, splitPos))) return splitPos;
+		const { ends, first } = this;
+		for (let k = lastIndexAtMost(ends, first, bodyEnd); k >= first; k--) {
+			const end = ends[k]!;
+			if (end <= bodyStart) break;
+			if (validateLeft(this.text.slice(bodyStart, end))) return end;
 		}
 		return -1;
 	}
