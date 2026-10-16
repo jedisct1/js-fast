@@ -50,6 +50,20 @@ test("a prefix given to a heuristic pattern still ends a structured token", () =
 	expect(scan(text, patterns).map((s) => s.pattern.name)).toEqual(["sendgrid"]);
 });
 
+test("a structured pattern that can match nothing finds no empty tokens", () => {
+	const caps: TokenPattern = {
+		kind: "structured",
+		name: "caps",
+		prefix: "",
+		fullRegex: "[A-Z]*",
+		trailingAlphabet: ALPHANUMERIC_UPPER,
+		parse: (body) => ({ segments: [body], alphabets: [ALPHANUMERIC_UPPER] }),
+		format: (segments) => segments.join(""),
+	};
+	expect(describeSpans(scan("", [caps]))).toEqual([]);
+	expect(describeSpans(scan("ab CD", [caps]))).toEqual(["caps@3-5:CD"]);
+});
+
 describe("a split never moves to shorten an overlong token", () => {
 	const vercelThenKeys = (keys: number): string =>
 		`vercel_${"A".repeat(20)}${AWS_KEY.repeat(keys)}`;

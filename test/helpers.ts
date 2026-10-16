@@ -106,6 +106,7 @@ export const ADVERSARIAL_TEXTS: Record<string, (size: number) => string> = {
 	"slack + AIza": (n) => `xoxb-1-1-${repeatTo("AIza", n - 9)}`,
 	"slack user + glc_": (n) => `xoxp-1-1-1-${repeatTo("glc_", n - 11)}`,
 	"sendgrid + AIza": (n) => `SG.${repeatTo("AIza", n - 3)}`,
+	"adjacent Slack tokens": (n) => repeatTo(SAMPLE_TOKENS["slack-bot"]!, n),
 	mixed: (n) =>
 		repeatTo("AKIAglc_AIzasbp_pypi-hf_SKnpm_vercel_sk-proj-xoxb-1-1-", n),
 };

@@ -1274,15 +1274,9 @@ function scanHeuristic(text, pattern, candidates) {
   }
 }
 function scanStructured(text, pattern, boundaries, candidates) {
-  const regex = new RegExp(pattern.fullRegex, "g");
-  for (let match = regex.exec(text);match !== null; match = regex.exec(text)) {
-    const start = match.index;
-    if (match[0].length === 0) {
-      regex.lastIndex = start + 1;
-      continue;
-    }
-    const end = boundaries.structuredEnd(pattern, start, start + match[0].length);
-    if (end === -1)
+  for (const start of boundaries.occurrencesOf(pattern.prefix)) {
+    const end = boundaries.structuredEndAt(pattern, start);
+    if (end === -1 || end === start)
       continue;
     candidates.push({
       start,

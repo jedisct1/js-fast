@@ -272,7 +272,7 @@ class Boundaries {
 	}
 
 	/** Return where a structured token matched from `start` to `matchEnd` ends, or -1. */
-	structuredEnd(
+	private structuredEnd(
 		pattern: StructuredTokenPattern,
 		start: number,
 		matchEnd: number,
@@ -293,10 +293,8 @@ class Boundaries {
 		return matchEnd;
 	}
 
-	private structuredEndAt(
-		pattern: StructuredTokenPattern,
-		pos: number,
-	): number {
+	/** Return where a structured token starting at `pos` ends, or -1. */
+	structuredEndAt(pattern: StructuredTokenPattern, pos: number): number {
 		const regex = getStickyRegex(pattern);
 		regex.lastIndex = pos;
 		const match = regex.exec(this.text);
@@ -481,19 +479,9 @@ function scanStructured(
 	boundaries: Boundaries,
 	candidates: TokenSpan[],
 ): void {
-	const regex = new RegExp(pattern.fullRegex, "g");
-	for (let match = regex.exec(text); match !== null; match = regex.exec(text)) {
-		const start = match.index;
-		if (match[0].length === 0) {
-			regex.lastIndex = start + 1;
-			continue;
-		}
-		const end = boundaries.structuredEnd(
-			pattern,
-			start,
-			start + match[0].length,
-		);
-		if (end === -1) continue;
+	for (const start of boundaries.occurrencesOf(pattern.prefix)) {
+		const end = boundaries.structuredEndAt(pattern, start);
+		if (end === -1 || end === start) continue;
 		candidates.push({
 			start,
 			end,
