@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { BUILTIN_PATTERNS, scan, TokenEncryptor } from "../src/tokens/index.ts";
 import {
+	AWS_KEY,
 	decodeSecret,
 	describeSpans,
 	KEY,
@@ -115,11 +116,21 @@ describe("tokens next to each other are all found", () => {
 describe("a body only stops early before a valid token", () => {
 	for (const fixture of [SENDGRID, GITLAB]) {
 		test(fixture.label, () => {
-			for (const suffix of ["Z", "-", `-${fixture.prefix}short`]) {
+			for (const suffix of [
+				"Z",
+				"-",
+				`-${fixture.prefix}short`,
+				"AKIA",
+				AWS_KEY.slice(0, -1),
+				`${AWS_KEY}A`,
+			]) {
 				expect(find(fixture.token + suffix)).toEqual([]);
 			}
 			const { text, spans } = join([fixture, fixture], "Z");
 			expect(find(text)).toEqual(spans.slice(1));
+
+			const only = BUILTIN_PATTERNS.filter((p) => p.name === fixture.name);
+			expect(find(fixture.token + AWS_KEY, only)).toEqual([spanAt(0, fixture)]);
 		});
 	}
 

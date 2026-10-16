@@ -1020,7 +1020,6 @@ function sortedUnique(positions) {
 class Boundaries {
   text;
   occurrences = new Map;
-  positions;
   ends;
   first;
   constructor(text, allPatterns) {
@@ -1029,13 +1028,13 @@ class Boundaries {
     for (const { prefix } of allPatterns) {
       if (prefix.length === 0 || this.occurrences.has(prefix))
         continue;
-      const positions = findAllPositions(text, prefix);
-      this.occurrences.set(prefix, positions);
-      for (const pos of positions)
+      const occurrences = findAllPositions(text, prefix);
+      this.occurrences.set(prefix, occurrences);
+      for (const pos of occurrences)
         found.push(pos);
     }
-    this.positions = sortedUnique(found);
-    if (this.positions.length === 0) {
+    const positions = sortedUnique(found);
+    if (positions.length === 0) {
       this.ends = NO_OFFSETS;
       this.first = 0;
       return;
@@ -1045,11 +1044,11 @@ class Boundaries {
       if (isSeparator(text, i))
         separators++;
     }
-    this.ends = new Int32Array(this.positions.length + separators);
+    this.ends = new Int32Array(positions.length + separators);
     this.first = this.ends.length;
-    this.findEnds(allPatterns);
+    this.findEnds(positions, allPatterns);
   }
-  findEnds(allPatterns) {
+  findEnds(positions, allPatterns) {
     const { text } = this;
     const byFirstChar = new Map;
     const unprefixed = [];
@@ -1070,8 +1069,8 @@ class Boundaries {
       group.push(pattern);
     }
     let lowestEnd = text.length + 1;
-    for (let k = this.positions.length - 1;k >= 0; k--) {
-      const pos = this.positions[k];
+    for (let k = positions.length - 1;k >= 0; k--) {
+      const pos = positions[k];
       if (pos >= lowestEnd)
         continue;
       const group = byFirstChar.get(text[pos]);
@@ -1138,7 +1137,7 @@ class Boundaries {
       return split;
     if (!validate(text.slice(bodyStart, matchEnd)))
       return -1;
-    if (matchEnd < text.length && pattern.trailingAlphabet.charToIndex.has(text[matchEnd]) && !this.isPrefixPosition(matchEnd)) {
+    if (matchEnd < text.length && pattern.trailingAlphabet.charToIndex.has(text[matchEnd]) && !this.isBoundaryPosition(matchEnd)) {
       return -1;
     }
     return matchEnd;
@@ -1162,9 +1161,9 @@ class Boundaries {
     }
     return -1;
   }
-  isPrefixPosition(pos) {
-    const k = lastIndexAtMost(this.positions, 0, pos);
-    return k >= 0 && this.positions[k] === pos;
+  isBoundaryPosition(pos) {
+    const k = lastIndexAtMost(this.ends, this.first, pos);
+    return k >= this.first && this.ends[k] === pos;
   }
 }
 function scan(text, patterns, allPatterns) {

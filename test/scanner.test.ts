@@ -14,13 +14,7 @@ import {
 	type TokenPattern,
 	WrappedTokenFormatError,
 } from "../src/tokens/index.ts";
-import {
-	AWS_KEY,
-	describeSpans,
-	KEY,
-	SAMPLE_TOKENS,
-	wrappersIn,
-} from "./helpers.ts";
+import { AWS_KEY, describeSpans, KEY, wrappersIn } from "./helpers.ts";
 
 const awsAt = (start: number): string =>
 	`aws-access-key@${start}-${start + AWS_KEY.length}:${AWS_KEY.slice(4)}`;
@@ -41,14 +35,6 @@ function simple(
 		minBodyLength,
 	};
 }
-
-test("a prefix given to a heuristic pattern still ends a structured token", () => {
-	const heuristic = BUILTIN_PATTERNS.find((p) => p.kind === "heuristic")!;
-	const prefixed = { ...heuristic, name: "prefixed", prefix: "Zq" };
-	const patterns = [prefixed as TokenPattern, ...BUILTIN_PATTERNS];
-	const text = `${SAMPLE_TOKENS.sendgrid}Zq`;
-	expect(scan(text, patterns).map((s) => s.pattern.name)).toEqual(["sendgrid"]);
-});
 
 test("a structured pattern that can match nothing finds no empty tokens", () => {
 	const caps: TokenPattern = {

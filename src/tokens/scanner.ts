@@ -154,7 +154,6 @@ type PrefixedPattern = SimpleTokenPattern | StructuredTokenPattern;
  */
 class Boundaries {
 	private readonly occurrences = new Map<string, readonly number[]>();
-	private readonly positions: Int32Array;
 	private readonly ends: Int32Array;
 	private first: number;
 
@@ -165,12 +164,12 @@ class Boundaries {
 		const found: number[] = [];
 		for (const { prefix } of allPatterns) {
 			if (prefix.length === 0 || this.occurrences.has(prefix)) continue;
-			const positions = findAllPositions(text, prefix);
-			this.occurrences.set(prefix, positions);
-			for (const pos of positions) found.push(pos);
+			const occurrences = findAllPositions(text, prefix);
+			this.occurrences.set(prefix, occurrences);
+			for (const pos of occurrences) found.push(pos);
 		}
-		this.positions = sortedUnique(found);
-		if (this.positions.length === 0) {
+		const positions = sortedUnique(found);
+		if (positions.length === 0) {
 			this.ends = NO_OFFSETS;
 			this.first = 0;
 			return;
@@ -179,13 +178,16 @@ class Boundaries {
 		for (let i = 0; i < text.length; i++) {
 			if (isSeparator(text, i)) separators++;
 		}
-		this.ends = new Int32Array(this.positions.length + separators);
+		this.ends = new Int32Array(positions.length + separators);
 		this.first = this.ends.length;
-		this.findEnds(allPatterns);
+		this.findEnds(positions, allPatterns);
 	}
 
 	/** Check every prefix position from right to left, and keep where a body can end. */
-	private findEnds(allPatterns: readonly TokenPattern[]): void {
+	private findEnds(
+		positions: Int32Array,
+		allPatterns: readonly TokenPattern[],
+	): void {
 		const { text } = this;
 		const byFirstChar = new Map<string, PrefixedPattern[]>();
 		const unprefixed: PrefixedPattern[] = [];
@@ -206,8 +208,8 @@ class Boundaries {
 		}
 
 		let lowestEnd = text.length + 1;
-		for (let k = this.positions.length - 1; k >= 0; k--) {
-			const pos = this.positions[k]!;
+		for (let k = positions.length - 1; k >= 0; k--) {
+			const pos = positions[k]!;
 			// Already kept as part of the separators before a later token.
 			if (pos >= lowestEnd) continue;
 			const group = byFirstChar.get(text[pos]!);
@@ -303,7 +305,7 @@ class Boundaries {
 		if (
 			matchEnd < text.length &&
 			pattern.trailingAlphabet.charToIndex.has(text[matchEnd]!) &&
-			!this.isPrefixPosition(matchEnd)
+			!this.isBoundaryPosition(matchEnd)
 		) {
 			return -1;
 		}
@@ -334,9 +336,9 @@ class Boundaries {
 		return -1;
 	}
 
-	private isPrefixPosition(pos: number): boolean {
-		const k = lastIndexAtMost(this.positions, 0, pos);
-		return k >= 0 && this.positions[k] === pos;
+	private isBoundaryPosition(pos: number): boolean {
+		const k = lastIndexAtMost(this.ends, this.first, pos);
+		return k >= this.first && this.ends[k] === pos;
 	}
 }
 
