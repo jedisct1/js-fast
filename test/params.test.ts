@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { FastCipher } from "../src/cipher.ts";
+import {
+	InvalidBranchDistError,
+	InvalidParametersError,
+	InvalidRadixError,
+	InvalidSBoxCountError,
+	InvalidWordLengthError,
+} from "../src/errors.ts";
 import { calculateRecommendedParams } from "../src/params.ts";
 
 describe("calculateRecommendedParams", () => {
@@ -77,7 +84,37 @@ describe("calculateRecommendedParams", () => {
 	});
 
 	test("rejects invalid radix and word length values", () => {
-		expect(() => calculateRecommendedParams(3, 4)).toThrow();
-		expect(() => calculateRecommendedParams(10, 1)).toThrow();
+		for (const radix of [3, 10.5, Number.NaN]) {
+			expect(() => calculateRecommendedParams(radix, 4)).toThrow(
+				InvalidParametersError,
+			);
+		}
+		for (const wordLength of [1, 2.5, Number.NaN]) {
+			expect(() => calculateRecommendedParams(10, wordLength)).toThrow(
+				InvalidParametersError,
+			);
+		}
+	});
+});
+
+describe("FastCipher parameter validation", () => {
+	// 240 is also a multiple of 2.5, so only the integer check rejects a word
+	// length of 2.5.
+	const params = { ...calculateRecommendedParams(10, 4), numLayers: 240 };
+	const key = new Uint8Array(16);
+
+	test.each([
+		["radix", InvalidRadixError, [3, 257, 10.5, Number.NaN]],
+		["wordLength", InvalidWordLengthError, [1, 2.5, Number.NaN]],
+		["numLayers", InvalidWordLengthError, [0, -4, 4.5, Number.NaN]],
+		["sboxCount", InvalidSBoxCountError, [0, -1, 1.5, Number.NaN]],
+		["branchDist1", InvalidBranchDistError, [0.5, 3, Number.NaN]],
+		["branchDist2", InvalidBranchDistError, [-1, 0, 0.5, 2, Number.NaN]],
+	] as const)("rejects invalid %s", (field, error, values) => {
+		for (const value of values) {
+			expect(() => {
+				FastCipher.create({ ...params, [field]: value }, key).destroy();
+			}).toThrow(error);
+		}
 	});
 });

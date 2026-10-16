@@ -121,7 +121,12 @@ export function calculateRecommendedParams(
 	wordLength: number,
 	securityLevel = 128,
 ): FastParams {
-	if (radix < 4 || wordLength < 2) {
+	if (
+		!Number.isInteger(radix) ||
+		!Number.isInteger(wordLength) ||
+		radix < 4 ||
+		wordLength < 2
+	) {
 		throw new InvalidParametersError();
 	}
 

@@ -421,19 +421,19 @@ class FastCipher {
     return new FastCipher(params, key, pool, false);
   }
   static validateParams(params, key) {
-    if (params.radix < 4 || params.radix > 256) {
+    if (!Number.isInteger(params.radix) || params.radix < 4 || params.radix > 256) {
       throw new InvalidRadixError;
     }
-    if (params.wordLength < 2 || params.numLayers === 0 || params.numLayers % params.wordLength !== 0) {
+    if (!Number.isInteger(params.wordLength) || params.wordLength < 2 || params.numLayers <= 0 || params.numLayers % params.wordLength !== 0) {
       throw new InvalidWordLengthError("Word length must be >= 2 and numLayers must be a positive multiple of wordLength");
     }
-    if (params.sboxCount === 0) {
+    if (!Number.isInteger(params.sboxCount) || params.sboxCount <= 0) {
       throw new InvalidSBoxCountError;
     }
-    if (params.branchDist1 > params.wordLength - 2) {
+    if (!Number.isInteger(params.branchDist1) || params.branchDist1 > params.wordLength - 2) {
       throw new InvalidBranchDistError("branchDist1 must be <= wordLength - 2");
     }
-    if (params.branchDist2 === 0 || params.branchDist2 > params.wordLength - 1 || params.branchDist2 > params.wordLength - params.branchDist1 - 1) {
+    if (!Number.isInteger(params.branchDist2) || params.branchDist2 < 1 || params.branchDist2 > params.wordLength - 1 || params.branchDist2 > params.wordLength - params.branchDist1 - 1) {
       throw new InvalidBranchDistError("branchDist2 is out of valid range");
     }
     if (key.length !== AES_KEY_SIZE3) {
@@ -613,7 +613,7 @@ function lookupRecommendedRounds(radix, ell) {
   return roundsForRow(lastIndex, ell);
 }
 function calculateRecommendedParams(radix, wordLength, securityLevel = 128) {
-  if (radix < 4 || wordLength < 2) {
+  if (!Number.isInteger(radix) || !Number.isInteger(wordLength) || radix < 4 || wordLength < 2) {
     throw new InvalidParametersError;
   }
   const secLevel = securityLevel === 0 ? 128 : securityLevel;

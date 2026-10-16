@@ -92,13 +92,18 @@ export class FastCipher {
 	}
 
 	private static validateParams(params: FastParams, key: Uint8Array): void {
-		if (params.radix < 4 || params.radix > 256) {
+		if (
+			!Number.isInteger(params.radix) ||
+			params.radix < 4 ||
+			params.radix > 256
+		) {
 			throw new InvalidRadixError();
 		}
 
 		if (
+			!Number.isInteger(params.wordLength) ||
 			params.wordLength < 2 ||
-			params.numLayers === 0 ||
+			params.numLayers <= 0 ||
 			params.numLayers % params.wordLength !== 0
 		) {
 			throw new InvalidWordLengthError(
@@ -106,16 +111,20 @@ export class FastCipher {
 			);
 		}
 
-		if (params.sboxCount === 0) {
+		if (!Number.isInteger(params.sboxCount) || params.sboxCount <= 0) {
 			throw new InvalidSBoxCountError();
 		}
 
-		if (params.branchDist1 > params.wordLength - 2) {
+		if (
+			!Number.isInteger(params.branchDist1) ||
+			params.branchDist1 > params.wordLength - 2
+		) {
 			throw new InvalidBranchDistError("branchDist1 must be <= wordLength - 2");
 		}
 
 		if (
-			params.branchDist2 === 0 ||
+			!Number.isInteger(params.branchDist2) ||
+			params.branchDist2 < 1 ||
 			params.branchDist2 > params.wordLength - 1 ||
 			params.branchDist2 > params.wordLength - params.branchDist1 - 1
 		) {
