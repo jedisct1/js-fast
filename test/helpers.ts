@@ -1,3 +1,7 @@
+import type { TokenSpan } from "../src/tokens/index.ts";
+
+export const KEY = Uint8Array.from({ length: 16 }, (_, i) => i);
+
 /** Fake credentials use ROT13 because GitHub also scans base64-encoded secrets. */
 export function decodeSecret(value: string): string {
 	return value.replace(/[A-Za-z]/g, (char) => {
@@ -71,6 +75,14 @@ const repeatTo = (unit: string, size: number): string =>
 
 /** A made-up AWS access key, built at run time so secret scanners ignore it. */
 export const AWS_KEY = `AKIA${"B".repeat(16)}`;
+
+export function describeSpans(spans: readonly TokenSpan[]): string[] {
+	return spans.map((s) => `${s.pattern.name}@${s.start}-${s.end}:${s.body}`);
+}
+
+export function wrappersIn(text: string): string[] {
+	return text.match(/\{ENCRYPTED:[^}]*\}/g) ?? [];
+}
 
 /**
  * Texts packed with prefixes, which used to make the scanner quadratic or worse.

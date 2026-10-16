@@ -25,9 +25,14 @@ import {
 	wrapperTweak,
 } from "../src/tokens/wrapped.ts";
 import shared from "./fixtures/wrapped-tokens-v1.json";
-import { decodeSecret, hex, SAMPLE_TOKENS } from "./helpers.ts";
+import {
+	decodeSecret,
+	hex,
+	KEY,
+	SAMPLE_TOKENS,
+	wrappersIn,
+} from "./helpers.ts";
 
-const KEY = Uint8Array.from({ length: 16 }, (_, i) => i);
 const OTHER_KEY = Uint8Array.from({ length: 16 }, (_, i) => 0x10 + i);
 const OPENER = "{ENCRYPTED:";
 
@@ -66,10 +71,6 @@ function wrapperFor(
 	});
 	enc.destroy();
 	return wrapped;
-}
-
-function wrappersIn(text: string): string[] {
-	return text.match(/\{ENCRYPTED:[^}]*\}/g) ?? [];
 }
 
 function thrown(run: () => unknown): Error {

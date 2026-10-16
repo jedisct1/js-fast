@@ -295,10 +295,8 @@ describe("scanner tests", () => {
 
 	test("nested invalid RHS: sk-proj- with npm_ + AKIA tail does not split", () => {
 		const enc = new TokenEncryptor(TEST_KEY);
-		// npm_ body greedily consumes 36 B's + AKIAfoo (all alphanumeric = 43 chars).
-		// wouldMatchSimpleAt tries truncating at AKIA: left body (36 B's) validates,
-		// but AKIAfoo is only 3 chars after prefix (needs 16). If wouldMatchSimpleAt
-		// doesn't verify the nested RHS, it falsely accepts the npm_ split.
+		// The npm_ body would be the right length if it stopped at AKIA,
+		// but AKIAfoo is not a valid token, so it can't stop there.
 		const body = `${"A".repeat(48)}npm_${"B".repeat(36)}AKIAfoo`;
 		const token = `sk-proj-${body}`;
 		const encrypted = enc.encrypt(token);
@@ -342,7 +340,6 @@ describe("scanner tests", () => {
 
 	test("adversarial: many embedded prefixes in one body scans in reasonable time", () => {
 		// Body with 50 embedded "npm_" substrings, none leading to a valid RHS.
-		// Tests that recursive wouldMatchAt doesn't blow up combinatorially.
 		const segment = "npm_"; // 4 chars
 		const filler = "AAAA"; // 4 chars, keeps body in alphanumeric alphabet
 		const body = (segment + filler).repeat(50) + "A".repeat(8); // 408 chars
