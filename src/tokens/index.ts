@@ -557,8 +557,18 @@ export class TokenEncryptor {
 		return this.wrapped;
 	}
 
+	/**
+	 * Add a pattern that is checked before the existing ones.
+	 *
+	 * Names must be unique.
+	 *
+	 * @throws TokenError if the name is taken.
+	 */
 	register(pattern: TokenPattern): void {
 		this.assertAlive();
+		if (this.patterns.some((p) => p.name === pattern.name)) {
+			throw new TokenError(`A ${pattern.name} pattern is already registered`);
+		}
 		this.patterns.unshift(pattern);
 	}
 

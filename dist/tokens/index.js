@@ -1822,6 +1822,9 @@ class TokenEncryptor {
   }
   register(pattern) {
     this.assertAlive();
+    if (this.patterns.some((p) => p.name === pattern.name)) {
+      throw new TokenError(`A ${pattern.name} pattern is already registered`);
+    }
     this.patterns.unshift(pattern);
   }
   destroy() {

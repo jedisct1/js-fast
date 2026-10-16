@@ -25,6 +25,7 @@ import { transformBody } from "../src/tokens/transformer.ts";
 import { decodeSecret } from "./helpers.ts";
 
 const KEY_07 = new Uint8Array(16).fill(0x07);
+const GITHUB = `ghp_${"aB3".repeat(12)}`;
 
 const SLACK_PLAIN = decodeSecret("kbko-12345678-12345678-fvKN");
 const SLACK_ENCRYPTED = decodeSecret("kbko-19234138-19234138-i20Q");
@@ -1036,7 +1037,6 @@ describe("custom patterns with unsupported radices", () => {
 });
 
 describe("decryptToken rejections", () => {
-	const GITHUB = `ghp_${"aB3".repeat(12)}`;
 	const SENDGRID = `SG.${"a".repeat(22)}.${"b".repeat(43)}`;
 
 	function rejection(
@@ -1205,29 +1205,38 @@ describe("decryptToken rejections", () => {
 		).toBe(enc.decryptToken(span.encrypted, "github-pat"));
 	});
 
-	test("registered patterns shadow built-in ones of the same name", () => {
-		const enc = new TokenEncryptor(KEY_07);
-		enc.register({
-			kind: "simple",
-			name: "github-pat",
-			prefix: "mine_",
-			bodyRegex: "[0-9]{12}",
-			bodyAlphabet: DIGITS,
-			minBodyLength: 12,
-		});
-		const encrypted = enc.encryptToken("mine_123456789012", "github-pat");
-		expect(encrypted).toMatch(/^mine_\d{12}$/);
-		expect(enc.decryptToken(encrypted, "github-pat")).toBe("mine_123456789012");
-		expect(() => enc.decryptToken(GITHUB, "github-pat")).toThrow(
-			TokenFormatError,
-		);
-	});
-
 	test("destroyed encryptor", () => {
 		const enc = new TokenEncryptor(KEY_07);
 		enc.destroy();
 		expect(() => enc.decryptToken(GITHUB, "github-pat")).toThrow("destroyed");
 		expect(() => enc.encryptToken(GITHUB, "github-pat")).toThrow("destroyed");
+	});
+});
+
+describe("register()", () => {
+	const ACCOUNT: TokenPattern = {
+		kind: "simple",
+		name: "account",
+		prefix: "acct_",
+		bodyRegex: "[0-9]{12}",
+		bodyAlphabet: DIGITS,
+		minBodyLength: 12,
+	};
+
+	test("rejects a name that is already taken", () => {
+		const enc = new TokenEncryptor(KEY_07);
+		enc.register(ACCOUNT);
+		expect(() => enc.register({ ...ACCOUNT, name: "github-pat" })).toThrow(
+			TokenError,
+		);
+		expect(() => enc.register({ ...ACCOUNT, prefix: "other_" })).toThrow(
+			TokenError,
+		);
+
+		const reference = new TokenEncryptor(KEY_07);
+		reference.register(ACCOUNT);
+		const text = `${GITHUB} acct_123456789012 other_123456789012`;
+		expect(enc.encrypt(text)).toBe(reference.encrypt(text));
 	});
 });
 

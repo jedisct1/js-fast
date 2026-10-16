@@ -132,6 +132,13 @@ export declare class TokenEncryptor {
     }): string;
     decryptWrapped(text: string, options?: WrappedDecryptOptions): string | WrappedDecryptResult;
     private wrappedCipher;
+    /**
+     * Add a pattern that is checked before the existing ones.
+     *
+     * Names must be unique.
+     *
+     * @throws TokenError if the name is taken.
+     */
     register(pattern: TokenPattern): void;
     destroy(): void;
 }
